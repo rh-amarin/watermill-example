@@ -1,8 +1,8 @@
 package events
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/asyncapi-cloudevents/watermill-abstraction/pkg/pubsub"
@@ -51,12 +51,15 @@ func FromCloudEvent(ce cloudevents.Event) (*NodePoolEvent, error) {
 	return &event, nil
 }
 
-// CloudEventToMessage converts a CloudEvent to a pubsub.Message
-func CloudEventToMessage(ce *cloudevents.Event) (*pubsub.Message, error) {
-	// Marshal CloudEvent to JSON
-	bytes, err := json.Marshal(ce)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal CloudEvent: %w", err)
+// CloudEventToEventMessage converts a CloudEvent to a pubsub.EventMessage
+func CloudEventToEventMessage(ce *cloudevents.Event) (*pubsub.EventMessage, error) {
+	// Extract CloudEvent data
+	var data any
+	if err := ce.DataAs(&data); err != nil {
+		// If DataAs fails, try to get raw bytes
+		if bytes := ce.Data(); len(bytes) > 0 {
+			data = bytes
+		}
 	}
 
 	// Extract CloudEvent attributes as metadata
@@ -81,18 +84,44 @@ func CloudEventToMessage(ce *cloudevents.Event) (*pubsub.Message, error) {
 		}
 	}
 
-	return &pubsub.Message{
-		UUID:     ce.ID(),
-		Payload:  bytes,
+	return &pubsub.EventMessage{
+		ID:       ce.ID(),
+		Type:     ce.Type(),
+		Source:   ce.Source(),
+		Payload:  data,
 		Metadata: metadata,
 	}, nil
 }
 
-// MessageToCloudEvent converts a pubsub.Message to a CloudEvent
-func MessageToCloudEvent(msg *pubsub.Message) (*cloudevents.Event, error) {
-	var ce cloudevents.Event
-	if err := json.Unmarshal(msg.Payload, &ce); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal CloudEvent: %w", err)
+// EventMessageToCloudEvent converts a pubsub.EventMessage to a CloudEvent
+func EventMessageToCloudEvent(msg *pubsub.EventMessage) (*cloudevents.Event, error) {
+	ce := cloudevents.NewEvent()
+	ce.SetID(msg.ID)
+	ce.SetType(msg.Type)
+	ce.SetSource(msg.Source)
+
+	// Set the event data
+	if err := ce.SetData(cloudevents.ApplicationJSON, msg.Payload); err != nil {
+		return nil, fmt.Errorf("failed to set event data: %w", err)
 	}
+
+	// Set optional fields from metadata
+	if timeStr, ok := msg.Metadata["ce_time"]; ok {
+		if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
+			ce.SetTime(t)
+		}
+	}
+	if subject, ok := msg.Metadata["ce_subject"]; ok {
+		ce.SetSubject(subject)
+	}
+
+	// Set extensions from metadata
+	for k, v := range msg.Metadata {
+		if strings.HasPrefix(k, "ce_extension_") {
+			extKey := strings.TrimPrefix(k, "ce_extension_")
+			ce.SetExtension(extKey, v)
+		}
+	}
+
 	return &ce, nil
 }

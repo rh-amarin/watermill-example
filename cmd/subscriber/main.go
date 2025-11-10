@@ -53,30 +53,21 @@ func runSubscriber(ctx context.Context, ps pubsub.Subscriber, topic, subscriberI
 		"subscriber_id": subscriberID,
 	})
 
-	handler := func(ctx context.Context, msg *pubsub.Message) error {
-		// Parse CloudEvent from JSON payload
-		ce, err := pubsub.ParseCloudEventFromJSON(msg.Payload)
-		if err != nil {
-			logger.Error("Failed to parse CloudEvent from JSON", err, watermill.LogFields{
-				"message_id": msg.UUID,
-			})
-			return err
-		}
-
-		// Extract NodePoolEvent from CloudEvent data
+	handler := func(ctx context.Context, msg *pubsub.EventMessage) error {
+		// Extract NodePoolEvent from EventMessage payload
 		var nodePoolEvent events.NodePoolEvent
-		if ce.Data != nil {
-			// Marshal data back to JSON and unmarshal into NodePoolEvent
-			dataBytes, err := json.Marshal(ce.Data)
+		if msg.Payload != nil {
+			// Marshal payload to JSON and unmarshal into NodePoolEvent
+			dataBytes, err := json.Marshal(msg.Payload)
 			if err != nil {
-				logger.Error("Failed to marshal CloudEvent data", err, watermill.LogFields{
-					"message_id": msg.UUID,
+				logger.Error("Failed to marshal EventMessage payload", err, watermill.LogFields{
+					"message_id": msg.ID,
 				})
 				return err
 			}
 			if err := json.Unmarshal(dataBytes, &nodePoolEvent); err != nil {
 				logger.Error("Failed to unmarshal NodePoolEvent", err, watermill.LogFields{
-					"message_id": msg.UUID,
+					"message_id": msg.ID,
 				})
 				return err
 			}
@@ -84,10 +75,10 @@ func runSubscriber(ctx context.Context, ps pubsub.Subscriber, topic, subscriberI
 
 		logger.Info("Received CloudEvent", watermill.LogFields{
 			"subscriber_id": subscriberID,
-			"message_id":    msg.UUID,
-			"ce_id":         ce.ID,
-			"ce_type":       ce.Type,
-			"ce_source":     ce.Source,
+			"message_id":    msg.ID,
+			"ce_id":         msg.ID,
+			"ce_type":       msg.Type,
+			"ce_source":     msg.Source,
 			"cluster_id":    nodePoolEvent.ClusterID,
 			"nodepool_id":   nodePoolEvent.ID,
 			"href":          nodePoolEvent.Href,

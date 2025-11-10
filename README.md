@@ -69,17 +69,19 @@ func main() {
     
     ctx := context.Background()
     
-    // Publish a message
-    msg := &pubsub.Message{
-        UUID:    "123",
-        Payload: []byte("Hello, World!"),
+    // Publish an EventMessage
+    eventMsg := &pubsub.EventMessage{
+        ID:      "123",
+        Type:    "example.type",
+        Source:  "example-source",
+        Payload: "Hello, World!",
         Metadata: map[string]string{"source": "example"},
     }
-    ps.Publish(ctx, "test-topic", msg)
+    ps.Publish(ctx, "test-topic", eventMsg)
     
     // Subscribe to messages
-    ps.Subscribe(ctx, "test-topic", func(ctx context.Context, msg *pubsub.Message) error {
-        println("Received:", string(msg.Payload))
+    ps.Subscribe(ctx, "test-topic", func(ctx context.Context, msg *pubsub.EventMessage) error {
+        fmt.Printf("Received: ID=%s, Type=%s, Payload=%v\n", msg.ID, msg.Type, msg.Payload)
         return nil
     })
 }
@@ -127,14 +129,16 @@ func main() {
         Generation: 1,
     }
     
-    // Convert to CloudEvent
-    ce, err := events.ToCloudEvent(nodePoolEvent, "my-service")
-    if err != nil {
-        panic(err)
+    // Create EventMessage with NodePoolEvent as payload
+    eventMsg := &pubsub.EventMessage{
+        ID:      "event-123",
+        Type:    events.CloudEventType,
+        Source:  events.CloudEventSource,
+        Payload: nodePoolEvent,
     }
     
-    // Publish CloudEvent directly (conversion happens internally)
-    ps.Publish(ctx, "nodepool-events", *ce)
+    // Publish EventMessage (conversion to CloudEvent happens internally)
+    ps.Publish(ctx, "nodepool-events", eventMsg)
 }
 ```
 
@@ -143,17 +147,21 @@ func main() {
 To receive and process CloudEvents:
 
 ```go
-handler := func(ctx context.Context, msg *pubsub.Message) error {
-    // Convert pubsub.Message to CloudEvent
-    ce, err := events.MessageToCloudEvent(msg)
-    if err != nil {
-        return err
-    }
+import (
+    "encoding/json"
+    "fmt"
+)
+
+handler := func(ctx context.Context, msg *pubsub.EventMessage) error {
+    // Access CloudEvent fields directly from EventMessage
+    fmt.Printf("Event ID: %s, Type: %s, Source: %s\n", 
+        msg.ID, msg.Type, msg.Source)
     
-    // Extract NodePoolEvent from CloudEvent
-    nodePoolEvent, err := events.FromCloudEvent(*ce)
-    if err != nil {
-        return err
+    // Extract NodePoolEvent from EventMessage payload
+    var nodePoolEvent events.NodePoolEvent
+    if msg.Payload != nil {
+        dataBytes, _ := json.Marshal(msg.Payload)
+        json.Unmarshal(dataBytes, &nodePoolEvent)
     }
     
     // Process the event

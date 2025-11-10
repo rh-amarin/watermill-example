@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -13,6 +14,19 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+// NodePoolEvent represents a node pool event for testing
+type NodePoolEvent struct {
+	ClusterID  int32  `json:"clusterId"`
+	ID         int32  `json:"id"`
+	Href       string `json:"href"`
+	Generation int32  `json:"generation"`
+}
+
+const (
+	cloudEventType   = "com.example.nodepool.event"
+	cloudEventSource = "watermill-publisher"
 )
 
 func TestRabbitMQPubSub_Integration(t *testing.T) {
@@ -59,9 +73,17 @@ func TestRabbitMQPubSub_Integration(t *testing.T) {
 	topic := "test-topic"
 
 	// Test subscribing - set up subscription BEFORE publishing
-	received := make(chan *Message, 1)
-	handler := func(ctx context.Context, msg *Message) error {
-		received <- msg
+	received := make(chan *NodePoolEvent, 1)
+	handler := func(ctx context.Context, msg *EventMessage) error {
+		// Extract NodePoolEvent from payload
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received <- &nodePoolEvent
 		return nil
 	}
 
@@ -72,11 +94,17 @@ func TestRabbitMQPubSub_Integration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Test publishing - now that subscription is set up
-	eventMsg := &EventMessage[any]{
+	nodePoolEvent := &NodePoolEvent{
+		ClusterID:  1,
+		ID:         10,
+		Href:       "/api/clusters/1/nodepools/10",
+		Generation: 1,
+	}
+	eventMsg := &EventMessage{
 		ID:       "test-event-1",
-		Type:     "test.type",
-		Source:   "test-source",
-		Payload:  map[string]string{"message": "hello"},
+		Type:     cloudEventType,
+		Source:   cloudEventSource,
+		Payload:  nodePoolEvent,
 		Metadata: map[string]string{"key": "value"},
 	}
 
@@ -85,10 +113,12 @@ func TestRabbitMQPubSub_Integration(t *testing.T) {
 
 	// Wait for message
 	select {
-	case msg := <-received:
-		assert.NotNil(t, msg)
-		assert.Equal(t, eventMsg.ID, msg.UUID)
-		assert.NotEmpty(t, msg.Payload)
+	case receivedEvent := <-received:
+		assert.NotNil(t, receivedEvent)
+		assert.Equal(t, nodePoolEvent.ClusterID, receivedEvent.ClusterID)
+		assert.Equal(t, nodePoolEvent.ID, receivedEvent.ID)
+		assert.Equal(t, nodePoolEvent.Href, receivedEvent.Href)
+		assert.Equal(t, nodePoolEvent.Generation, receivedEvent.Generation)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for message")
 	}
@@ -147,16 +177,30 @@ func TestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
 	topic := "load-balance-topic"
 
 	// Set up subscribers
-	received1 := make(chan *Message, 10)
-	received2 := make(chan *Message, 10)
+	received1 := make(chan *NodePoolEvent, 10)
+	received2 := make(chan *NodePoolEvent, 10)
 
-	handler1 := func(ctx context.Context, msg *Message) error {
-		received1 <- msg
+	handler1 := func(ctx context.Context, msg *EventMessage) error {
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received1 <- &nodePoolEvent
 		return nil
 	}
 
-	handler2 := func(ctx context.Context, msg *Message) error {
-		received2 <- msg
+	handler2 := func(ctx context.Context, msg *EventMessage) error {
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received2 <- &nodePoolEvent
 		return nil
 	}
 
@@ -172,11 +216,17 @@ func TestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
 	// Publish multiple messages
 	numMessages := 5
 	for i := 0; i < numMessages; i++ {
-		eventMsg := &EventMessage[any]{
+		nodePoolEvent := &NodePoolEvent{
+			ClusterID:  int32(i),
+			ID:         int32(i * 10),
+			Href:       fmt.Sprintf("/api/clusters/%d/nodepools/%d", i, i*10),
+			Generation: int32(i),
+		}
+		eventMsg := &EventMessage{
 			ID:      fmt.Sprintf("test-event-%d", i),
-			Type:    "test.type",
-			Source:  "test-source",
-			Payload: map[string]int{"count": i},
+			Type:    cloudEventType,
+			Source:  cloudEventSource,
+			Payload: nodePoolEvent,
 		}
 		err = publisher.Publish(ctx, topic, eventMsg)
 		require.NoError(t, err)
@@ -255,9 +305,16 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 
 	// IMPORTANT: In Google Pub/Sub, subscription must exist BEFORE publishing messages
 	// Set up subscription first
-	received := make(chan *Message, 1)
-	handler := func(ctx context.Context, msg *Message) error {
-		received <- msg
+	received := make(chan *NodePoolEvent, 1)
+	handler := func(ctx context.Context, msg *EventMessage) error {
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received <- &nodePoolEvent
 		return nil
 	}
 
@@ -269,11 +326,17 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Now publish the message
-	eventMsg := &EventMessage[any]{
+	nodePoolEvent := &NodePoolEvent{
+		ClusterID:  1,
+		ID:         10,
+		Href:       "/api/clusters/1/nodepools/10",
+		Generation: 1,
+	}
+	eventMsg := &EventMessage{
 		ID:       "test-event-1",
-		Type:     "test.type",
-		Source:   "test-source",
-		Payload:  map[string]string{"message": "hello"},
+		Type:     cloudEventType,
+		Source:   cloudEventSource,
+		Payload:  nodePoolEvent,
 		Metadata: map[string]string{"key": "value"},
 	}
 
@@ -285,10 +348,12 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 
 	// Wait for message
 	select {
-	case msg := <-received:
-		assert.NotNil(t, msg)
-		assert.Equal(t, eventMsg.ID, msg.UUID)
-		assert.NotEmpty(t, msg.Payload)
+	case receivedEvent := <-received:
+		assert.NotNil(t, receivedEvent)
+		assert.Equal(t, nodePoolEvent.ClusterID, receivedEvent.ClusterID)
+		assert.Equal(t, nodePoolEvent.ID, receivedEvent.ID)
+		assert.Equal(t, nodePoolEvent.Href, receivedEvent.Href)
+		assert.Equal(t, nodePoolEvent.Generation, receivedEvent.Generation)
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timeout waiting for message")
 	}
@@ -364,16 +429,34 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	topic := "load-balance-topic"
 
 	// Set up subscribers
-	received1 := make(chan *Message, 10)
-	received2 := make(chan *Message, 10)
+	received1 := make(chan *NodePoolEvent, 10)
+	received2 := make(chan *NodePoolEvent, 10)
 
-	handler1 := func(ctx context.Context, msg *Message) error {
-		received1 <- msg
+	handler1 := func(ctx context.Context, msg *EventMessage) error {
+		t.Log("handler1")
+		t.Logf("Received message: %+v", msg)
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received1 <- &nodePoolEvent
 		return nil
 	}
 
-	handler2 := func(ctx context.Context, msg *Message) error {
-		received2 <- msg
+	handler2 := func(ctx context.Context, msg *EventMessage) error {
+		t.Log("handler2")
+		t.Logf("Received message: %+v", msg)
+		var nodePoolEvent NodePoolEvent
+		if msg.Payload != nil {
+			dataBytes, err := json.Marshal(msg.Payload)
+			require.NoError(t, err)
+			err = json.Unmarshal(dataBytes, &nodePoolEvent)
+			require.NoError(t, err)
+		}
+		received2 <- &nodePoolEvent
 		return nil
 	}
 
@@ -384,27 +467,42 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give subscribers time to set up (Google Pub/Sub needs time to create topics/subscriptions)
-	time.Sleep(1 * time.Second)
+	// Wait longer to ensure both subscribers are fully connected and ready
+	time.Sleep(3 * time.Second)
 
 	// Publish multiple messages
-	numMessages := 5
+	numMessages := 10
 	for i := 0; i < numMessages; i++ {
-		eventMsg := &EventMessage[any]{
+		nodePoolEvent := NodePoolEvent{
+			ClusterID:  int32(i),
+			ID:         int32(i * 10),
+			Href:       fmt.Sprintf("/api/clusters/%d/nodepools/%d", i, i*10),
+			Generation: int32(i),
+		}
+		eventMsg := &EventMessage{
 			ID:      fmt.Sprintf("test-event-%d", i),
-			Type:    "test.type",
-			Source:  "test-source",
-			Payload: map[string]int{"count": i},
+			Type:    cloudEventType,
+			Source:  cloudEventSource,
+			Payload: nodePoolEvent,
 		}
 		err = publisher.Publish(ctx, topic, eventMsg)
 		require.NoError(t, err)
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Wait for messages to be distributed
-	time.Sleep(1 * time.Second)
+	// Wait longer for messages to be distributed between subscribers
+	totalReceived := 0
+	for i := 0; i < 25; i++ { // up to 25 seconds
+		totalReceived = len(received1) + len(received2)
+		if totalReceived >= numMessages {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		t.Logf("Total received: %d in %d seconds", totalReceived, i)
+	}
 
 	// Verify messages were distributed between subscribers
-	totalReceived := len(received1) + len(received2)
+	totalReceived = len(received1) + len(received2)
 	assert.Equal(t, numMessages, totalReceived, "All messages should be received")
 	assert.Greater(t, len(received1), 0, "Subscriber 1 should receive at least one message")
 	assert.Greater(t, len(received2), 0, "Subscriber 2 should receive at least one message")

@@ -10,24 +10,33 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 )
 
-// MessageHandler is a function that processes messages
-type MessageHandler func(ctx context.Context, msg *Message) error
+// Publisher is an interface for publishing messages
+type Publisher interface {
+	Publish(ctx context.Context, topic string, event *EventMessage) error
+	Close() error
+}
 
-// Message represents a message in the pub/sub system
-type Message struct {
-	UUID      string
-	Payload   []byte
-	Metadata  map[string]string
-	CreatedAt time.Time
+// Subscriber is an interface for subscribing to messages
+type Subscriber interface {
+	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
+	Close() error
+}
+
+// MessageHandler is a function that processes messages
+type MessageHandler func(ctx context.Context, msg *EventMessage) error
+
+// PubSub combines Publisher and Subscriber interfaces
+type PubSub interface {
+	Publisher
+	Subscriber
 }
 
 // EventMessage represents an event message to be published
-// T is the type of the payload data
-type EventMessage[T any] struct {
+type EventMessage struct {
 	ID       string            // Event ID (required)
 	Type     string            // Event type (required)
 	Source   string            // Event source (required)
-	Payload  T                 // Event data payload
+	Payload  any               // Event data payload
 	Metadata map[string]string // Additional metadata/extensions
 }
 
@@ -46,30 +55,42 @@ type CloudEvent struct {
 	Extensions      map[string]interface{} `json:"-"`                         // Extensions (will be merged into root)
 }
 
-// FromWatermillMessage converts a watermill message to our Message type
-func FromWatermillMessage(msg *message.Message) *Message {
+// watermillMessageToEventMessage converts a watermill message directly to an EventMessage by parsing the CloudEvent JSON
+func watermillMessageToEventMessage(msg *message.Message) (*EventMessage, error) {
+	// Parse CloudEvent from JSON payload
+	ce, err := ParseCloudEventFromJSON(msg.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CloudEvent from JSON: %w", err)
+	}
+
+	// Extract metadata from watermill message metadata and CloudEvent extensions
 	metadata := make(map[string]string)
 	// Copy metadata from watermill message
 	for k, v := range msg.Metadata {
 		metadata[k] = v
 	}
-	return &Message{
-		UUID:      msg.UUID,
-		Payload:   msg.Payload,
-		Metadata:  metadata,
-		CreatedAt: time.Now(),
+	// Add CloudEvent extensions to metadata
+	if ce.Extensions != nil {
+		for k, v := range ce.Extensions {
+			if str, ok := v.(string); ok {
+				metadata[k] = str
+			}
+		}
 	}
-}
 
-// Publisher is an interface for publishing messages
-// T is the type of the payload data
-type Publisher[T any] interface {
-	Publish(ctx context.Context, topic string, event *EventMessage[T]) error
-	Close() error
+	eventMsg := &EventMessage{
+		ID:       ce.ID,
+		Type:     ce.Type,
+		Source:   ce.Source,
+		Payload:  ce.Data,
+		Metadata: metadata,
+	}
+
+	return eventMsg, nil
 }
 
 // eventMessageToCloudEvent converts an EventMessage to a CloudEvent struct
-func eventMessageToCloudEvent[T any](event *EventMessage[T]) (*CloudEvent, error) {
+func eventMessageToCloudEvent(event *EventMessage) (*CloudEvent, error) {
 	if event.ID == "" {
 		return nil, fmt.Errorf("event ID is required")
 	}
@@ -139,7 +160,7 @@ func cloudEventToJSON(ce *CloudEvent) ([]byte, error) {
 }
 
 // eventMessageToWatermillMessage converts an EventMessage to a watermill message
-func eventMessageToWatermillMessage[T any](event *EventMessage[T]) (*message.Message, error) {
+func eventMessageToWatermillMessage(event *EventMessage) (*message.Message, error) {
 	// Convert EventMessage to CloudEvent
 	ce, err := eventMessageToCloudEvent(event)
 	if err != nil {
@@ -154,28 +175,6 @@ func eventMessageToWatermillMessage[T any](event *EventMessage[T]) (*message.Mes
 
 	// Create watermill message with Event ID as UUID
 	watermillMsg := message.NewMessage(event.ID, bytes)
-
-	// Set CloudEvent attributes as metadata
-	watermillMsg.Metadata.Set("ce_id", event.ID)
-	watermillMsg.Metadata.Set("ce_type", event.Type)
-	watermillMsg.Metadata.Set("ce_source", event.Source)
-	watermillMsg.Metadata.Set("ce_specversion", ce.SpecVersion)
-	if ce.Time != nil {
-		watermillMsg.Metadata.Set("ce_time", ce.Time.Format(time.RFC3339))
-	}
-	if ce.Subject != "" {
-		watermillMsg.Metadata.Set("ce_subject", ce.Subject)
-	}
-	if ce.DataContentType != "" {
-		watermillMsg.Metadata.Set("ce_datacontenttype", ce.DataContentType)
-	}
-
-	// Copy extensions as metadata
-	for k, v := range ce.Extensions {
-		if str, ok := v.(string); ok {
-			watermillMsg.Metadata.Set("ce_extension_"+k, str)
-		}
-	}
 
 	return watermillMsg, nil
 }
@@ -246,19 +245,6 @@ func ParseCloudEventFromJSON(data []byte) (*CloudEvent, error) {
 	return ce, nil
 }
 
-// Subscriber is an interface for subscribing to messages
-type Subscriber interface {
-	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
-	Close() error
-}
-
-// PubSub combines Publisher and Subscriber interfaces
-// T is the type of the payload data
-type PubSub[T any] interface {
-	Publisher[T]
-	Subscriber
-}
-
 // BrokerType represents the type of message broker
 type BrokerType string
 
@@ -281,8 +267,7 @@ type Config struct {
 }
 
 // NewPubSub creates a new PubSub instance based on the broker type
-// Returns PubSub[any] to allow any payload type
-func NewPubSub(config Config) (PubSub[any], error) {
+func NewPubSub(config Config) (PubSub, error) {
 	switch config.BrokerType {
 	case BrokerTypeRabbitMQ:
 		return NewRabbitMQPubSub(config)

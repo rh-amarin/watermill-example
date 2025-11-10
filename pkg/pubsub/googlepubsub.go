@@ -10,14 +10,14 @@ import (
 )
 
 // GooglePubSubPubSub implements PubSub using Google Cloud Pub/Sub
-type GooglePubSubPubSub[T any] struct {
+type GooglePubSubPubSub struct {
 	publisher  *googlecloud.Publisher
 	subscriber *googlecloud.Subscriber
 	logger     watermill.LoggerAdapter
 }
 
 // NewGooglePubSubPubSub creates a new Google Pub/Sub instance
-func NewGooglePubSubPubSub(config Config) (PubSub[any], error) {
+func NewGooglePubSubPubSub(config Config) (PubSub, error) {
 	if config.GoogleProjectID == "" {
 		return nil, fmt.Errorf("google project id is required")
 	}
@@ -51,7 +51,7 @@ func NewGooglePubSubPubSub(config Config) (PubSub[any], error) {
 		return nil, fmt.Errorf("failed to create google pubsub subscriber: %w", err)
 	}
 
-	return &GooglePubSubPubSub[any]{
+	return &GooglePubSubPubSub{
 		publisher:  publisher,
 		subscriber: subscriber,
 		logger:     config.Logger,
@@ -59,7 +59,7 @@ func NewGooglePubSubPubSub(config Config) (PubSub[any], error) {
 }
 
 // Publish publishes an EventMessage to the specified topic
-func (g *GooglePubSubPubSub[T]) Publish(ctx context.Context, topic string, event *EventMessage[T]) error {
+func (g *GooglePubSubPubSub) Publish(ctx context.Context, topic string, event *EventMessage) error {
 	if g.publisher == nil {
 		return ErrPublisherNotInitialized
 	}
@@ -73,7 +73,7 @@ func (g *GooglePubSubPubSub[T]) Publish(ctx context.Context, topic string, event
 }
 
 // Subscribe subscribes to messages from the specified topic
-func (g *GooglePubSubPubSub[T]) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
+func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
 	if g.subscriber == nil {
 		return ErrSubscriberNotInitialized
 	}
@@ -85,8 +85,16 @@ func (g *GooglePubSubPubSub[T]) Subscribe(ctx context.Context, topic string, han
 
 	go func() {
 		for msg := range messages {
-			appMsg := FromWatermillMessage(msg)
-			if err := handler(ctx, appMsg); err != nil {
+			eventMsg, err := watermillMessageToEventMessage(msg)
+			if err != nil {
+				g.logger.Error("failed to convert message to EventMessage", err, watermill.LogFields{
+					"topic":      topic,
+					"message_id": msg.UUID,
+				})
+				msg.Nack()
+				continue
+			}
+			if err := handler(ctx, eventMsg); err != nil {
 				g.logger.Error("failed to handle message", err, watermill.LogFields{
 					"topic":      topic,
 					"message_id": msg.UUID,
@@ -102,7 +110,7 @@ func (g *GooglePubSubPubSub[T]) Subscribe(ctx context.Context, topic string, han
 }
 
 // Close closes the publisher and subscriber
-func (g *GooglePubSubPubSub[T]) Close() error {
+func (g *GooglePubSubPubSub) Close() error {
 	var errs []error
 
 	if g.publisher != nil {

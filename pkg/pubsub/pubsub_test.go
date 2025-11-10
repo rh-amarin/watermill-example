@@ -8,44 +8,49 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMessageConversion(t *testing.T) {
-	t.Run("FromWatermillMessage", func(t *testing.T) {
+func TestWatermillMessageToEventMessage(t *testing.T) {
+	t.Run("ValidCloudEvent", func(t *testing.T) {
+		// Create a CloudEvent JSON payload
+		cloudEventJSON := `{
+			"specversion": "1.0",
+			"type": "test.type",
+			"source": "test.source",
+			"id": "test-id-123",
+			"data": {"message": "hello"}
+		}`
+
 		watermillMsg := &message.Message{
-			UUID:     uuid.New().String(),
-			Payload:  []byte("test payload"),
+			UUID:     "test-id-123",
+			Payload:  []byte(cloudEventJSON),
 			Metadata: make(message.Metadata),
 		}
 		watermillMsg.Metadata.Set("key1", "value1")
 		watermillMsg.Metadata.Set("key2", "value2")
 
-		appMsg := FromWatermillMessage(watermillMsg)
+		eventMsg, err := watermillMessageToEventMessage(watermillMsg)
+		require.NoError(t, err)
 
-		assert.Equal(t, watermillMsg.UUID, appMsg.UUID)
-		assert.Equal(t, []byte(watermillMsg.Payload), appMsg.Payload)
-		assert.Equal(t, "value1", appMsg.Metadata["key1"])
-		assert.Equal(t, "value2", appMsg.Metadata["key2"])
-		assert.False(t, appMsg.CreatedAt.IsZero())
+		assert.Equal(t, "test-id-123", eventMsg.ID)
+		assert.Equal(t, "test.type", eventMsg.Type)
+		assert.Equal(t, "test.source", eventMsg.Source)
+		assert.NotNil(t, eventMsg.Payload)
+		assert.Equal(t, "value1", eventMsg.Metadata["key1"])
+		assert.Equal(t, "value2", eventMsg.Metadata["key2"])
 	})
 
-	t.Run("RoundTrip", func(t *testing.T) {
-		original := &Message{
+	t.Run("InvalidJSON", func(t *testing.T) {
+		watermillMsg := &message.Message{
 			UUID:     uuid.New().String(),
-			Payload:  []byte("test payload"),
-			Metadata: map[string]string{"key1": "value1"},
+			Payload:  []byte("invalid json"),
+			Metadata: make(message.Metadata),
 		}
 
-		// Create watermill message manually for testing
-		watermillMsg := message.NewMessage(original.UUID, original.Payload)
-		for k, v := range original.Metadata {
-			watermillMsg.Metadata.Set(k, v)
-		}
-		converted := FromWatermillMessage(watermillMsg)
-
-		assert.Equal(t, original.UUID, converted.UUID)
-		assert.Equal(t, original.Payload, converted.Payload)
-		assert.Equal(t, original.Metadata["key1"], converted.Metadata["key1"])
+		_, err := watermillMessageToEventMessage(watermillMsg)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse CloudEvent")
 	})
 }
 
@@ -86,14 +91,16 @@ func TestNewPubSub(t *testing.T) {
 
 func TestMessageHandler(t *testing.T) {
 	t.Run("HandlerSignature", func(t *testing.T) {
-		var handler MessageHandler = func(ctx context.Context, msg *Message) error {
+		var handler MessageHandler = func(ctx context.Context, msg *EventMessage) error {
 			return nil
 		}
 
 		ctx := context.Background()
-		msg := &Message{
-			UUID:    uuid.New().String(),
-			Payload: []byte("test"),
+		msg := &EventMessage{
+			ID:      uuid.New().String(),
+			Type:    "test.type",
+			Source:  "test.source",
+			Payload: "test",
 		}
 
 		err := handler(ctx, msg)
@@ -129,8 +136,8 @@ func TestErrors(t *testing.T) {
 // Integration test helpers (these would require actual broker connections)
 func TestPubSubInterface(t *testing.T) {
 	t.Run("PublisherInterface", func(t *testing.T) {
-		var pub Publisher[any]
-		var r *RabbitMQPubSub[any]
+		var pub Publisher
+		var r *RabbitMQPubSub
 		pub = r
 		_ = pub              // Verify it compiles
 		assert.True(t, true) // Interface is satisfied
@@ -138,15 +145,15 @@ func TestPubSubInterface(t *testing.T) {
 
 	t.Run("SubscriberInterface", func(t *testing.T) {
 		var sub Subscriber
-		var r *RabbitMQPubSub[any]
+		var r *RabbitMQPubSub
 		sub = r
 		_ = sub              // Verify it compiles
 		assert.True(t, true) // Interface is satisfied
 	})
 
 	t.Run("PubSubInterface", func(t *testing.T) {
-		var ps PubSub[any]
-		var r *RabbitMQPubSub[any]
+		var ps PubSub
+		var r *RabbitMQPubSub
 		ps = r
 		_ = ps               // Verify it compiles
 		assert.True(t, true) // Interface is satisfied

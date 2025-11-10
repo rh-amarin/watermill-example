@@ -42,7 +42,7 @@ func main() {
 	runPublisher(ctx, ps, *topic, logger)
 }
 
-func runPublisher(ctx context.Context, ps pubsub.Publisher[any], topic string, logger watermill.LoggerAdapter) {
+func runPublisher(ctx context.Context, ps pubsub.Publisher, topic string, logger watermill.LoggerAdapter) {
 	logger.Info("Starting publisher", watermill.LogFields{"topic": topic})
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -70,7 +70,7 @@ func runPublisher(ctx context.Context, ps pubsub.Publisher[any], topic string, l
 			}
 
 			// Create EventMessage with NodePoolEvent as the payload type
-			eventMsg := &pubsub.EventMessage[any]{
+			eventMsg := &pubsub.EventMessage{
 				ID:       fmt.Sprintf("event-%d", messageCount),
 				Type:     events.CloudEventType,
 				Source:   "watermill-publisher",
