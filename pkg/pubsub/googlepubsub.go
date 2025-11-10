@@ -11,9 +11,10 @@ import (
 
 // GooglePubSubPubSub implements PubSub using Google Cloud Pub/Sub
 type GooglePubSubPubSub struct {
-	publisher  *googlecloud.Publisher
-	subscriber *googlecloud.Subscriber
-	logger     watermill.LoggerAdapter
+	publisher      *googlecloud.Publisher
+	subscriber     *googlecloud.Subscriber
+	logger         watermill.LoggerAdapter
+	workerPoolSize int
 }
 
 // NewGooglePubSubPubSub creates a new Google Pub/Sub instance
@@ -51,10 +52,16 @@ func NewGooglePubSubPubSub(config Config) (PubSub, error) {
 		return nil, fmt.Errorf("failed to create google pubsub subscriber: %w", err)
 	}
 
+	workerPoolSize := config.WorkerPoolSize
+	if workerPoolSize <= 0 {
+		workerPoolSize = 1
+	}
+
 	return &GooglePubSubPubSub{
-		publisher:  publisher,
-		subscriber: subscriber,
-		logger:     config.Logger,
+		publisher:      publisher,
+		subscriber:     subscriber,
+		logger:         config.Logger,
+		workerPoolSize: workerPoolSize,
 	}, nil
 }
 
@@ -83,26 +90,39 @@ func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handle
 		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
 	}
 
+	// Create and start worker pool
+	pool := newWorkerPool(g.workerPoolSize, g.logger, topic)
+	pool.start(ctx)
+
+	// Start message loop goroutine
 	go func() {
-		for msg := range messages {
-			eventMsg, err := watermillMessageToEventMessage(msg)
-			if err != nil {
-				g.logger.Error("failed to convert message to EventMessage", err, watermill.LogFields{
-					"topic":      topic,
-					"message_id": msg.UUID,
+		defer pool.stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				g.logger.Info("subscribe loop cancelled, shutting down", watermill.LogFields{
+					"topic": topic,
 				})
-				msg.Nack()
-				continue
-			}
-			if err := handler(ctx, eventMsg); err != nil {
-				g.logger.Error("failed to handle message", err, watermill.LogFields{
-					"topic":      topic,
-					"message_id": msg.UUID,
+				return
+			case msg, ok := <-messages:
+				if !ok {
+					// Channel closed
+					g.logger.Info("message channel closed", watermill.LogFields{
+						"topic": topic,
+					})
+					return
+				}
+
+				// Submit job to worker pool
+				pool.submit(messageJob{
+					msg:     msg,
+					handler: handler,
+					ctx:     ctx,
+					logger:  g.logger,
+					topic:   topic,
 				})
-				msg.Nack()
-				continue
 			}
-			msg.Ack()
 		}
 	}()
 

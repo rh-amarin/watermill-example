@@ -10,9 +10,10 @@ import (
 
 // RabbitMQPubSub implements PubSub using RabbitMQ
 type RabbitMQPubSub struct {
-	publisher  *amqp.Publisher
-	subscriber *amqp.Subscriber
-	logger     watermill.LoggerAdapter
+	publisher      *amqp.Publisher
+	subscriber     *amqp.Subscriber
+	logger         watermill.LoggerAdapter
+	workerPoolSize int
 }
 
 // NewRabbitMQPubSub creates a new RabbitMQ PubSub instance
@@ -33,10 +34,16 @@ func NewRabbitMQPubSub(config Config) (PubSub, error) {
 		return nil, fmt.Errorf("failed to create rabbitmq subscriber: %w", err)
 	}
 
+	workerPoolSize := config.WorkerPoolSize
+	if workerPoolSize <= 0 {
+		workerPoolSize = 1
+	}
+
 	return &RabbitMQPubSub{
-		publisher:  publisher,
-		subscriber: subscriber,
-		logger:     config.Logger,
+		publisher:      publisher,
+		subscriber:     subscriber,
+		logger:         config.Logger,
+		workerPoolSize: workerPoolSize,
 	}, nil
 }
 
@@ -65,26 +72,39 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
 	}
 
+	// Create and start worker pool
+	pool := newWorkerPool(r.workerPoolSize, r.logger, topic)
+	pool.start(ctx)
+
+	// Start message loop goroutine
 	go func() {
-		for msg := range messages {
-			eventMsg, err := watermillMessageToEventMessage(msg)
-			if err != nil {
-				r.logger.Error("failed to convert message to EventMessage", err, watermill.LogFields{
-					"topic":      topic,
-					"message_id": msg.UUID,
+		defer pool.stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				r.logger.Info("subscribe loop cancelled, shutting down", watermill.LogFields{
+					"topic": topic,
 				})
-				msg.Nack()
-				continue
-			}
-			if err := handler(ctx, eventMsg); err != nil {
-				r.logger.Error("failed to handle message", err, watermill.LogFields{
-					"topic":      topic,
-					"message_id": msg.UUID,
+				return
+			case msg, ok := <-messages:
+				if !ok {
+					// Channel closed
+					r.logger.Info("message channel closed", watermill.LogFields{
+						"topic": topic,
+					})
+					return
+				}
+
+				// Submit job to worker pool
+				pool.submit(messageJob{
+					msg:     msg,
+					handler: handler,
+					ctx:     ctx,
+					logger:  r.logger,
+					topic:   topic,
 				})
-				msg.Nack()
-				continue
 			}
-			msg.Ack()
 		}
 	}()
 

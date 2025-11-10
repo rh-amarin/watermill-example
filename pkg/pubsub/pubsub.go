@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
@@ -258,6 +260,9 @@ type Config struct {
 	BrokerType BrokerType
 	Logger     watermill.LoggerAdapter
 
+	// Worker pool configuration
+	WorkerPoolSize int // Number of workers for processing messages concurrently (default: 1)
+
 	// RabbitMQ specific config
 	RabbitMQURL string
 
@@ -268,6 +273,11 @@ type Config struct {
 
 // NewPubSub creates a new PubSub instance based on the broker type
 func NewPubSub(config Config) (PubSub, error) {
+	// Set default worker pool size if not specified
+	if config.WorkerPoolSize <= 0 {
+		config.WorkerPoolSize = 1
+	}
+
 	switch config.BrokerType {
 	case BrokerTypeRabbitMQ:
 		return NewRabbitMQPubSub(config)
@@ -276,4 +286,147 @@ func NewPubSub(config Config) (PubSub, error) {
 	default:
 		return nil, ErrUnsupportedBrokerType
 	}
+}
+
+// withPanicRecovery wraps a message handler with panic recovery
+func withPanicRecovery(handler MessageHandler, logger watermill.LoggerAdapter, topic, messageID string) MessageHandler {
+	return func(ctx context.Context, msg *EventMessage) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logger.Error("panic recovered in message handler", fmt.Errorf("panic: %v", r), watermill.LogFields{
+					"topic":      topic,
+					"message_id": messageID,
+					"stack":      string(stack),
+				})
+				err = fmt.Errorf("panic recovered: %v", r)
+			}
+		}()
+		return handler(ctx, msg)
+	}
+}
+
+// messageJob represents a job to be processed by a worker
+type messageJob struct {
+	msg     *message.Message
+	handler MessageHandler
+	ctx     context.Context
+	logger  watermill.LoggerAdapter
+	topic   string
+}
+
+// workerPool manages a pool of workers for processing messages
+type workerPool struct {
+	workers int
+	jobChan chan messageJob
+	logger  watermill.LoggerAdapter
+	topic   string
+	wg      sync.WaitGroup
+}
+
+// newWorkerPool creates a new worker pool
+func newWorkerPool(workers int, logger watermill.LoggerAdapter, topic string) *workerPool {
+	if workers <= 0 {
+		workers = 1
+	}
+	return &workerPool{
+		workers: workers,
+		jobChan: make(chan messageJob, workers*2), // Buffer size: 2x workers
+		logger:  logger,
+		topic:   topic,
+	}
+}
+
+// start starts the worker pool
+func (wp *workerPool) start(ctx context.Context) {
+	for i := 0; i < wp.workers; i++ {
+		wp.wg.Add(1)
+		go wp.worker(ctx, i)
+	}
+}
+
+// worker processes messages from the job channel
+func (wp *workerPool) worker(ctx context.Context, id int) {
+	defer wp.wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			wp.logger.Info("worker shutting down", watermill.LogFields{
+				"worker_id": id,
+				"topic":     wp.topic,
+			})
+			return
+		case job, ok := <-wp.jobChan:
+			if !ok {
+				// Channel closed, exit
+				return
+			}
+			wp.processJob(ctx, job, id)
+		}
+	}
+}
+
+// processJob processes a single message job with panic recovery
+func (wp *workerPool) processJob(ctx context.Context, job messageJob, workerID int) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			wp.logger.Error("panic recovered in worker", fmt.Errorf("panic: %v", r), watermill.LogFields{
+				"worker_id":  workerID,
+				"topic":      wp.topic,
+				"message_id": job.msg.UUID,
+				"stack":      string(stack),
+			})
+			job.msg.Nack()
+		}
+	}()
+
+	// Convert watermill message to EventMessage
+	eventMsg, err := watermillMessageToEventMessage(job.msg)
+	if err != nil {
+		wp.logger.Error("failed to convert message to EventMessage", err, watermill.LogFields{
+			"worker_id":  workerID,
+			"topic":      wp.topic,
+			"message_id": job.msg.UUID,
+		})
+		job.msg.Nack()
+		return
+	}
+
+	// Wrap handler with panic recovery
+	safeHandler := withPanicRecovery(job.handler, wp.logger, wp.topic, job.msg.UUID)
+
+	// Process message using the job's context (from Subscribe)
+	if err := safeHandler(job.ctx, eventMsg); err != nil {
+		wp.logger.Error("failed to handle message", err, watermill.LogFields{
+			"worker_id":  workerID,
+			"topic":      wp.topic,
+			"message_id": job.msg.UUID,
+		})
+		job.msg.Nack()
+		return
+	}
+
+	job.msg.Ack()
+}
+
+// submit submits a job to the worker pool
+func (wp *workerPool) submit(job messageJob) {
+	select {
+	case wp.jobChan <- job:
+		// Job submitted successfully
+	default:
+		wp.logger.Error("worker pool job channel full, dropping message", nil, watermill.LogFields{
+			"topic":      wp.topic,
+			"message_id": job.msg.UUID,
+		})
+		job.msg.Nack()
+	}
+}
+
+// stop stops the worker pool gracefully
+func (wp *workerPool) stop() {
+	close(wp.jobChan)
+	wp.wg.Wait()
 }

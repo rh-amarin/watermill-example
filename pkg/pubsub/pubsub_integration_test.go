@@ -494,12 +494,13 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	totalReceived := 0
 	for i := 0; i < 25; i++ { // up to 25 seconds
 		totalReceived = len(received1) + len(received2)
+		t.Logf("Total received: %d in %d seconds", totalReceived, i)
 		if totalReceived >= numMessages {
 			break
 		}
 		time.Sleep(1 * time.Second)
-		t.Logf("Total received: %d in %d seconds", totalReceived, i)
 	}
+	t.Log("force test 1")
 
 	// Verify messages were distributed between subscribers
 	totalReceived = len(received1) + len(received2)
