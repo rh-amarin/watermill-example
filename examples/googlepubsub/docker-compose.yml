@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    container_name: pubsub-emulator
+    ports:
+      - "8085:8085"
+    command: >
+      gcloud beta emulators pubsub start
+      --host-port=0.0.0.0:8085
+      --project=test-project
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  publisher:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: pubsub-publisher
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    environment:
+      - GOOGLE_PROJECT_ID=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "publisher"]
+    restart: unless-stopped
+
+  subscriber-1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: pubsub-subscriber-1
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    environment:
+      - GOOGLE_PROJECT_ID=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-1"]
+    restart: unless-stopped
+
+  subscriber-2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: pubsub-subscriber-2
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    environment:
+      - GOOGLE_PROJECT_ID=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-2"]
+    restart: unless-stopped
+

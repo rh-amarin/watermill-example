@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  publisher:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: rabbitmq-publisher
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: ["/root/app", "--broker", "rabbitmq", "--topic", "test-topic", "--mode", "publisher"]
+    restart: unless-stopped
+
+  subscriber-1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: rabbitmq-subscriber-1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: ["/root/app", "--broker", "rabbitmq", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-1"]
+    restart: unless-stopped
+
+  subscriber-2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: rabbitmq-subscriber-2
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: ["/root/app", "--broker", "rabbitmq", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-2"]
+    restart: unless-stopped
+
