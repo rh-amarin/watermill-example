@@ -29,21 +29,6 @@ func TestMessageConversion(t *testing.T) {
 		assert.False(t, appMsg.CreatedAt.IsZero())
 	})
 
-	t.Run("ToWatermillMessage", func(t *testing.T) {
-		appMsg := &Message{
-			UUID:     uuid.New().String(),
-			Payload:  []byte("test payload"),
-			Metadata: map[string]string{"key1": "value1", "key2": "value2"},
-		}
-
-		watermillMsg := appMsg.ToWatermillMessage()
-
-		assert.Equal(t, appMsg.UUID, watermillMsg.UUID)
-		assert.Equal(t, appMsg.Payload, []byte(watermillMsg.Payload))
-		assert.Equal(t, "value1", watermillMsg.Metadata.Get("key1"))
-		assert.Equal(t, "value2", watermillMsg.Metadata.Get("key2"))
-	})
-
 	t.Run("RoundTrip", func(t *testing.T) {
 		original := &Message{
 			UUID:     uuid.New().String(),
@@ -51,7 +36,11 @@ func TestMessageConversion(t *testing.T) {
 			Metadata: map[string]string{"key1": "value1"},
 		}
 
-		watermillMsg := original.ToWatermillMessage()
+		// Create watermill message manually for testing
+		watermillMsg := message.NewMessage(original.UUID, original.Payload)
+		for k, v := range original.Metadata {
+			watermillMsg.Metadata.Set(k, v)
+		}
 		converted := FromWatermillMessage(watermillMsg)
 
 		assert.Equal(t, original.UUID, converted.UUID)
@@ -140,27 +129,26 @@ func TestErrors(t *testing.T) {
 // Integration test helpers (these would require actual broker connections)
 func TestPubSubInterface(t *testing.T) {
 	t.Run("PublisherInterface", func(t *testing.T) {
-		var pub Publisher
-		var r *RabbitMQPubSub
+		var pub Publisher[any]
+		var r *RabbitMQPubSub[any]
 		pub = r
-		_ = pub // Verify it compiles
+		_ = pub              // Verify it compiles
 		assert.True(t, true) // Interface is satisfied
 	})
 
 	t.Run("SubscriberInterface", func(t *testing.T) {
 		var sub Subscriber
-		var r *RabbitMQPubSub
+		var r *RabbitMQPubSub[any]
 		sub = r
-		_ = sub // Verify it compiles
+		_ = sub              // Verify it compiles
 		assert.True(t, true) // Interface is satisfied
 	})
 
 	t.Run("PubSubInterface", func(t *testing.T) {
-		var ps PubSub
-		var r *RabbitMQPubSub
+		var ps PubSub[any]
+		var r *RabbitMQPubSub[any]
 		ps = r
-		_ = ps // Verify it compiles
+		_ = ps               // Verify it compiles
 		assert.True(t, true) // Interface is satisfied
 	})
 }
-

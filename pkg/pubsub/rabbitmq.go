@@ -9,14 +9,14 @@ import (
 )
 
 // RabbitMQPubSub implements PubSub using RabbitMQ
-type RabbitMQPubSub struct {
+type RabbitMQPubSub[T any] struct {
 	publisher  *amqp.Publisher
 	subscriber *amqp.Subscriber
 	logger     watermill.LoggerAdapter
 }
 
 // NewRabbitMQPubSub creates a new RabbitMQ PubSub instance
-func NewRabbitMQPubSub(config Config) (PubSub, error) {
+func NewRabbitMQPubSub(config Config) (PubSub[any], error) {
 	if config.RabbitMQURL == "" {
 		return nil, fmt.Errorf("rabbitmq url is required")
 	}
@@ -33,25 +33,29 @@ func NewRabbitMQPubSub(config Config) (PubSub, error) {
 		return nil, fmt.Errorf("failed to create rabbitmq subscriber: %w", err)
 	}
 
-	return &RabbitMQPubSub{
+	return &RabbitMQPubSub[any]{
 		publisher:  publisher,
 		subscriber: subscriber,
 		logger:     config.Logger,
 	}, nil
 }
 
-// Publish publishes a message to the specified topic
-func (r *RabbitMQPubSub) Publish(ctx context.Context, topic string, msg *Message) error {
+// Publish publishes an EventMessage to the specified topic
+func (r *RabbitMQPubSub[T]) Publish(ctx context.Context, topic string, event *EventMessage[T]) error {
 	if r.publisher == nil {
 		return ErrPublisherNotInitialized
 	}
 
-	watermillMsg := msg.ToWatermillMessage()
+	watermillMsg, err := eventMessageToWatermillMessage(event)
+	if err != nil {
+		return fmt.Errorf("failed to convert EventMessage to watermill message: %w", err)
+	}
+
 	return r.publisher.Publish(topic, watermillMsg)
 }
 
 // Subscribe subscribes to messages from the specified topic
-func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
+func (r *RabbitMQPubSub[T]) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
 	if r.subscriber == nil {
 		return ErrSubscriberNotInitialized
 	}
@@ -66,7 +70,7 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 			appMsg := FromWatermillMessage(msg)
 			if err := handler(ctx, appMsg); err != nil {
 				r.logger.Error("failed to handle message", err, watermill.LogFields{
-					"topic": topic,
+					"topic":      topic,
 					"message_id": msg.UUID,
 				})
 				msg.Nack()
@@ -80,7 +84,7 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 }
 
 // Close closes the publisher and subscriber
-func (r *RabbitMQPubSub) Close() error {
+func (r *RabbitMQPubSub[T]) Close() error {
 	var errs []error
 
 	if r.publisher != nil {
@@ -101,4 +105,3 @@ func (r *RabbitMQPubSub) Close() error {
 
 	return nil
 }
-

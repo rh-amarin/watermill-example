@@ -5,44 +5,46 @@ test:
 	@echo "Running tests..."
 	go test ./pkg/pubsub/... -v
 
-# Build the application
+# Build the applications
 build:
-	@echo "Building application..."
-	go build -o bin/app ./cmd/app
+	@echo "Building applications..."
+	go build -o bin/publisher ./cmd/publisher
+	go build -o bin/subscriber ./cmd/subscriber
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
 	rm -rf bin/
-	docker-compose -f examples/rabbitmq/docker-compose.yml down -v
-	docker-compose -f examples/googlepubsub/docker-compose.yml down -v
+	podman compose -f examples/rabbitmq/podman compose.yml down -v
+	podman compose -f examples/googlepubsub/podman compose.yml down -v
 
-# Build Docker image
+# Build Docker images
 docker-build:
-	@echo "Building Docker image..."
-	docker build -t watermill-app:latest .
+	@echo "Building Docker images..."
+	podman build -t watermill-publisher:latest -f Dockerfile.publisher .
+	podman build -t watermill-subscriber:latest -f Dockerfile.subscriber .
 
 # Test RabbitMQ example
 docker-test-rabbitmq: docker-build
 	@echo "Testing RabbitMQ example..."
-	cd examples/rabbitmq && docker-compose up --build -d
+	cd examples/rabbitmq && podman compose up --build -d
 	@echo "Waiting for services to start..."
 	sleep 10
 	@echo "Checking logs..."
-	docker-compose -f examples/rabbitmq/docker-compose.yml logs --tail=50
+	podman compose -f examples/rabbitmq/podman compose.yml logs --tail=50
 	@echo "Stopping services..."
-	docker-compose -f examples/rabbitmq/docker-compose.yml down -v
+	podman compose -f examples/rabbitmq/podman compose.yml down -v
 
 # Test Google Pub/Sub example
 docker-test-googlepubsub: docker-build
 	@echo "Testing Google Pub/Sub example..."
-	cd examples/googlepubsub && docker-compose up --build -d
+	cd examples/googlepubsub && podman compose up --build -d
 	@echo "Waiting for services to start..."
 	sleep 15
 	@echo "Checking logs..."
-	docker-compose -f examples/googlepubsub/docker-compose.yml logs --tail=50
+	podman compose -f examples/googlepubsub/podman compose.yml logs --tail=50
 	@echo "Stopping services..."
-	docker-compose -f examples/googlepubsub/docker-compose.yml down -v
+	podman compose -f examples/googlepubsub/podman compose.yml down -v
 
 # Run all tests including Docker builds
 test-all: test docker-build docker-test-rabbitmq docker-test-googlepubsub

@@ -10,14 +10,14 @@ import (
 )
 
 // GooglePubSubPubSub implements PubSub using Google Cloud Pub/Sub
-type GooglePubSubPubSub struct {
+type GooglePubSubPubSub[T any] struct {
 	publisher  *googlecloud.Publisher
 	subscriber *googlecloud.Subscriber
 	logger     watermill.LoggerAdapter
 }
 
 // NewGooglePubSubPubSub creates a new Google Pub/Sub instance
-func NewGooglePubSubPubSub(config Config) (PubSub, error) {
+func NewGooglePubSubPubSub(config Config) (PubSub[any], error) {
 	if config.GoogleProjectID == "" {
 		return nil, fmt.Errorf("google project id is required")
 	}
@@ -29,7 +29,7 @@ func NewGooglePubSubPubSub(config Config) (PubSub, error) {
 	// If no credentials path is provided, use default credentials (works with emulator via PUBSUB_EMULATOR_HOST)
 
 	publisherConfig := googlecloud.PublisherConfig{
-		ProjectID: config.GoogleProjectID,
+		ProjectID:     config.GoogleProjectID,
 		ClientOptions: opts,
 	}
 
@@ -39,7 +39,7 @@ func NewGooglePubSubPubSub(config Config) (PubSub, error) {
 	}
 
 	subscriberConfig := googlecloud.SubscriberConfig{
-		ProjectID: config.GoogleProjectID,
+		ProjectID:     config.GoogleProjectID,
 		ClientOptions: opts,
 		GenerateSubscriptionName: func(topic string) string {
 			return topic + "-subscription"
@@ -51,25 +51,29 @@ func NewGooglePubSubPubSub(config Config) (PubSub, error) {
 		return nil, fmt.Errorf("failed to create google pubsub subscriber: %w", err)
 	}
 
-	return &GooglePubSubPubSub{
+	return &GooglePubSubPubSub[any]{
 		publisher:  publisher,
 		subscriber: subscriber,
 		logger:     config.Logger,
 	}, nil
 }
 
-// Publish publishes a message to the specified topic
-func (g *GooglePubSubPubSub) Publish(ctx context.Context, topic string, msg *Message) error {
+// Publish publishes an EventMessage to the specified topic
+func (g *GooglePubSubPubSub[T]) Publish(ctx context.Context, topic string, event *EventMessage[T]) error {
 	if g.publisher == nil {
 		return ErrPublisherNotInitialized
 	}
 
-	watermillMsg := msg.ToWatermillMessage()
+	watermillMsg, err := eventMessageToWatermillMessage(event)
+	if err != nil {
+		return fmt.Errorf("failed to convert EventMessage to watermill message: %w", err)
+	}
+
 	return g.publisher.Publish(topic, watermillMsg)
 }
 
 // Subscribe subscribes to messages from the specified topic
-func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
+func (g *GooglePubSubPubSub[T]) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
 	if g.subscriber == nil {
 		return ErrSubscriberNotInitialized
 	}
@@ -84,7 +88,7 @@ func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handle
 			appMsg := FromWatermillMessage(msg)
 			if err := handler(ctx, appMsg); err != nil {
 				g.logger.Error("failed to handle message", err, watermill.LogFields{
-					"topic": topic,
+					"topic":      topic,
 					"message_id": msg.UUID,
 				})
 				msg.Nack()
@@ -98,7 +102,7 @@ func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handle
 }
 
 // Close closes the publisher and subscriber
-func (g *GooglePubSubPubSub) Close() error {
+func (g *GooglePubSubPubSub[T]) Close() error {
 	var errs []error
 
 	if g.publisher != nil {
@@ -119,4 +123,3 @@ func (g *GooglePubSubPubSub) Close() error {
 
 	return nil
 }
-

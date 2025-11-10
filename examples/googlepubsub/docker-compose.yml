@@ -19,7 +19,7 @@ services:
   publisher:
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.publisher
     container_name: pubsub-publisher
     depends_on:
       pubsub-emulator:
@@ -27,13 +27,13 @@ services:
     environment:
       - GOOGLE_PROJECT_ID=test-project
       - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "publisher"]
+    command: ["/root/publisher", "--broker", "googlepubsub", "--topic", "test-topic"]
     restart: unless-stopped
 
   subscriber-1:
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.subscriber
     container_name: pubsub-subscriber-1
     depends_on:
       pubsub-emulator:
@@ -41,13 +41,13 @@ services:
     environment:
       - GOOGLE_PROJECT_ID=test-project
       - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-1"]
+    command: ["/root/subscriber", "--broker", "googlepubsub", "--topic", "test-topic", "--subscriber-id", "subscriber-1"]
     restart: unless-stopped
 
   subscriber-2:
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.subscriber
     container_name: pubsub-subscriber-2
     depends_on:
       pubsub-emulator:
@@ -55,6 +55,6 @@ services:
     environment:
       - GOOGLE_PROJECT_ID=test-project
       - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    command: ["/root/app", "--broker", "googlepubsub", "--topic", "test-topic", "--mode", "subscriber", "--subscriber-id", "subscriber-2"]
+    command: ["/root/subscriber", "--broker", "googlepubsub", "--topic", "test-topic", "--subscriber-id", "subscriber-2"]
     restart: unless-stopped
 
