@@ -297,7 +297,7 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 		GoogleProjectID: "test-project",
 	}
 
-	ps, err := NewGooglePubSubPubSub(config)
+	ps, err := NewGooglePubSub(config)
 	require.NoError(t, err)
 	defer ps.Close()
 
@@ -413,16 +413,16 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	}
 
 	// Create publisher
-	publisher, err := NewGooglePubSubPubSub(config)
+	publisher, err := NewGooglePubSub(config)
 	require.NoError(t, err)
 	defer publisher.Close()
 
 	// Create two subscribers
-	subscriber1, err := NewGooglePubSubPubSub(config)
+	subscriber1, err := NewGooglePubSub(config)
 	require.NoError(t, err)
 	defer subscriber1.Close()
 
-	subscriber2, err := NewGooglePubSubPubSub(config)
+	subscriber2, err := NewGooglePubSub(config)
 	require.NoError(t, err)
 	defer subscriber2.Close()
 

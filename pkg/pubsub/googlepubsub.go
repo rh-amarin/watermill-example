@@ -17,8 +17,8 @@ type GooglePubSubPubSub struct {
 	workerPoolSize int
 }
 
-// NewGooglePubSubPubSub creates a new Google Pub/Sub instance
-func NewGooglePubSubPubSub(config Config) (PubSub, error) {
+// NewGooglePubSub creates a new Google Pub/Sub instance
+func NewGooglePubSub(config Config) (PubSub, error) {
 	if config.GoogleProjectID == "" {
 		return nil, fmt.Errorf("google project id is required")
 	}

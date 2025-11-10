@@ -282,7 +282,7 @@ func NewPubSub(config Config) (PubSub, error) {
 	case BrokerTypeRabbitMQ:
 		return NewRabbitMQPubSub(config)
 	case BrokerTypeGooglePubSub:
-		return NewGooglePubSubPubSub(config)
+		return NewGooglePubSub(config)
 	default:
 		return nil, ErrUnsupportedBrokerType
 	}
