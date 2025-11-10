@@ -1,9 +1,18 @@
-.PHONY: test build clean docker-build docker-test-rabbitmq docker-test-googlepubsub
+.PHONY: test build clean docker-build docker-test-rabbitmq docker-test-googlepubsub test-integration
 
-# Run all tests
+# Run all tests (unit tests only, skips integration tests)
 test:
 	@echo "Running tests..."
-	go test ./pkg/pubsub/... -v
+	go test ./pkg/pubsub/... -v -short
+
+# Run integration tests (requires Docker/Podman)
+test-integration:
+	@echo "Running integration tests..."
+	go test ./pkg/pubsub/... -v -run Integration
+
+# Run all tests including integration tests
+test-all: test test-integration
+	@echo "All tests completed!"
 
 # Build the applications
 build:
@@ -47,6 +56,6 @@ docker-test-googlepubsub: docker-build
 	podman compose -f examples/googlepubsub/podman compose.yml down -v
 
 # Run all tests including Docker builds
-test-all: test docker-build docker-test-rabbitmq docker-test-googlepubsub
+test-all-docker: test docker-build docker-test-rabbitmq docker-test-googlepubsub
 	@echo "All tests completed!"
 
