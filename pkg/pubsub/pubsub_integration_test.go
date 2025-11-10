@@ -15,7 +15,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func xTestRabbitMQPubSub_Integration(t *testing.T) {
+func TestRabbitMQPubSub_Integration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
@@ -23,12 +24,12 @@ func xTestRabbitMQPubSub_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Start RabbitMQ container
-	rabbitmqContainer, err := rabbitmq.RunContainer(ctx,
-		testcontainers.WithImage("rabbitmq:3-management-alpine"),
+	rabbitmqContainer, err := rabbitmq.Run(ctx,
+		"rabbitmq:3.12.11-management-alpine",
 		rabbitmq.WithAdminUsername("guest"),
 		rabbitmq.WithAdminPassword("guest"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Server startup complete").
+			wait.ForLog("Time to start").
 				WithOccurrence(1).
 				WithStartupTimeout(60*time.Second)),
 	)
@@ -51,14 +52,26 @@ func xTestRabbitMQPubSub_Integration(t *testing.T) {
 		Logger:      logger,
 		RabbitMQURL: amqpURL,
 	}
-
 	ps, err := NewRabbitMQPubSub(config)
 	require.NoError(t, err)
 	defer ps.Close()
 
 	topic := "test-topic"
 
-	// Test publishing
+	// Test subscribing - set up subscription BEFORE publishing
+	received := make(chan *Message, 1)
+	handler := func(ctx context.Context, msg *Message) error {
+		received <- msg
+		return nil
+	}
+
+	err = ps.Subscribe(ctx, topic, handler)
+	require.NoError(t, err)
+
+	// Wait for subscription to be ready (queue binding)
+	time.Sleep(500 * time.Millisecond)
+
+	// Test publishing - now that subscription is set up
 	eventMsg := &EventMessage[any]{
 		ID:       "test-event-1",
 		Type:     "test.type",
@@ -68,16 +81,6 @@ func xTestRabbitMQPubSub_Integration(t *testing.T) {
 	}
 
 	err = ps.Publish(ctx, topic, eventMsg)
-	require.NoError(t, err)
-
-	// Test subscribing
-	received := make(chan *Message, 1)
-	handler := func(ctx context.Context, msg *Message) error {
-		received <- msg
-		return nil
-	}
-
-	err = ps.Subscribe(ctx, topic, handler)
 	require.NoError(t, err)
 
 	// Wait for message
@@ -91,7 +94,8 @@ func xTestRabbitMQPubSub_Integration(t *testing.T) {
 	}
 }
 
-func xTestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
+func TestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
@@ -100,7 +104,7 @@ func xTestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
 
 	// Start RabbitMQ container
 	rabbitmqContainer, err := rabbitmq.RunContainer(ctx,
-		testcontainers.WithImage("rabbitmq:3-management-alpine"),
+		testcontainers.WithImage("rabbitmq:3"),
 		rabbitmq.WithAdminUsername("guest"),
 		rabbitmq.WithAdminPassword("guest"),
 		testcontainers.WithWaitStrategy(
@@ -190,6 +194,7 @@ func xTestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
 }
 
 func TestGooglePubSubPubSub_Integration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
@@ -276,7 +281,7 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give message time to propagate
-	time.Sleep(500 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Wait for message
 	select {
@@ -289,7 +294,8 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 	}
 }
 
-func xTestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
+func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
@@ -378,7 +384,7 @@ func xTestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give subscribers time to set up (Google Pub/Sub needs time to create topics/subscriptions)
-	//time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	// Publish multiple messages
 	numMessages := 5
@@ -395,7 +401,7 @@ func xTestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 	}
 
 	// Wait for messages to be distributed
-	//time.Sleep(3 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	// Verify messages were distributed between subscribers
 	totalReceived := len(received1) + len(received2)

@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3
     container_name: rabbitmq
     ports:
       - "5672:5672"
@@ -16,7 +14,7 @@ services:
       timeout: 5s
       retries: 5
 
-  publisher:
+  rabbitmq-publisher:
     build:
       context: ../..
       dockerfile: Dockerfile.publisher
@@ -26,10 +24,10 @@ services:
         condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-    command: ["--broker", "rabbitmq", "--topic", "test-topic"]
+    command: ["/root/publisher", "--broker", "rabbitmq", "--topic", "test-topic"]
     restart: unless-stopped
 
-  subscriber-1:
+  rabbitmq-subscriber-1:
     build:
       context: ../..
       dockerfile: Dockerfile.subscriber
@@ -39,10 +37,10 @@ services:
         condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-    command: ["--broker", "rabbitmq", "--topic", "test-topic", "--subscriber-id", "subscriber-1"]
+    command: ["/root/subscriber", "--broker", "rabbitmq", "--topic", "test-topic", "--subscriber-id", "subscriber-1"]
     restart: unless-stopped
 
-  subscriber-2:
+  rabbitmq-subscriber-2:
     build:
       context: ../..
       dockerfile: Dockerfile.subscriber
@@ -52,6 +50,6 @@ services:
         condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-    command: ["--broker", "rabbitmq", "--topic", "test-topic", "--subscriber-id", "subscriber-2"]
+    command: ["/root/subscriber", "--broker", "rabbitmq", "--topic", "test-topic", "--subscriber-id", "subscriber-2"]
     restart: unless-stopped
 
