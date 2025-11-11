@@ -12,29 +12,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 )
 
-// Publisher is an interface for publishing messages
-type Publisher interface {
-	Publish(ctx context.Context, topic string, event *EventMessage) error
-	Close() error
-}
-
-// Subscriber is an interface for subscribing to messages
-type Subscriber interface {
-	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
-	Close() error
-}
-
-// MessageHandler is a function that processes messages
-type MessageHandler func(ctx context.Context, msg *EventMessage) error
-
-// PubSub combines Publisher and Subscriber interfaces
-type PubSub interface {
-	Publisher
-	Subscriber
-}
-
-// TypedEventMessage represents an event message with a typed payload
-type TypedEventMessage[T any] struct {
+// EventMessage represents an event message with a typed payload
+type EventMessage[T any] struct {
 	ID       string            // Event ID (required)
 	Type     string            // Event type (required)
 	Source   string            // Event source (required)
@@ -42,17 +21,8 @@ type TypedEventMessage[T any] struct {
 	Metadata map[string]string // Additional metadata/extensions
 }
 
-// TypedMessageHandler is a generic function that processes messages with typed payloads
-type TypedMessageHandler[T any] func(ctx context.Context, msg *TypedEventMessage[T]) error
-
-// EventMessage represents an event message to be published
-type EventMessage struct {
-	ID       string            // Event ID (required)
-	Type     string            // Event type (required)
-	Source   string            // Event source (required)
-	Payload  any               // Event data payload
-	Metadata map[string]string // Additional metadata/extensions
-}
+// MessageHandler is a generic function that processes messages with typed payloads
+type MessageHandler[T any] func(ctx context.Context, msg *EventMessage[T]) error
 
 // CloudEvent represents a CloudEvents-compliant event structure
 // Following the CloudEvents JSON specification: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md
@@ -69,42 +39,8 @@ type CloudEvent struct {
 	Extensions      map[string]interface{} `json:"-"`                         // Extensions (will be merged into root)
 }
 
-// watermillMessageToEventMessage converts a watermill message directly to an EventMessage by parsing the CloudEvent JSON
-func watermillMessageToEventMessage(msg *message.Message) (*EventMessage, error) {
-	// Parse CloudEvent from JSON payload
-	ce, err := ParseCloudEventFromJSON(msg.Payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CloudEvent from JSON: %w", err)
-	}
-
-	// Extract metadata from watermill message metadata and CloudEvent extensions
-	metadata := make(map[string]string)
-	// Copy metadata from watermill message
-	for k, v := range msg.Metadata {
-		metadata[k] = v
-	}
-	// Add CloudEvent extensions to metadata
-	if ce.Extensions != nil {
-		for k, v := range ce.Extensions {
-			if str, ok := v.(string); ok {
-				metadata[k] = str
-			}
-		}
-	}
-
-	eventMsg := &EventMessage{
-		ID:       ce.ID,
-		Type:     ce.Type,
-		Source:   ce.Source,
-		Payload:  ce.Data,
-		Metadata: metadata,
-	}
-
-	return eventMsg, nil
-}
-
-// eventMessageToCloudEvent converts an EventMessage to a CloudEvent struct
-func eventMessageToCloudEvent(event *EventMessage) (*CloudEvent, error) {
+// eventMessageToCloudEvent converts a typed EventMessage to a CloudEvent struct
+func eventMessageToCloudEvent[T any](event *EventMessage[T]) (*CloudEvent, error) {
 	if event.ID == "" {
 		return nil, fmt.Errorf("event ID is required")
 	}
@@ -173,8 +109,8 @@ func cloudEventToJSON(ce *CloudEvent) ([]byte, error) {
 	return json.Marshal(eventMap)
 }
 
-// eventMessageToWatermillMessage converts an EventMessage to a watermill message
-func eventMessageToWatermillMessage(event *EventMessage) (*message.Message, error) {
+// eventMessageToWatermillMessage converts a typed EventMessage to a watermill message
+func eventMessageToWatermillMessage[T any](event *EventMessage[T]) (*message.Message, error) {
 	// Convert EventMessage to CloudEvent
 	ce, err := eventMessageToCloudEvent(event)
 	if err != nil {
@@ -261,7 +197,7 @@ func ParseCloudEventFromJSON(data []byte) (*CloudEvent, error) {
 
 // parseCloudEventWithTypedData unmarshals CloudEvent JSON and extracts data directly into type T
 // This uses a single JSON unmarshal by leveraging json.RawMessage to avoid double marshalling
-func parseCloudEventWithTypedData[T any](data []byte) (*TypedEventMessage[T], error) {
+func parseCloudEventWithTypedData[T any](data []byte) (*EventMessage[T], error) {
 	// Use a struct that captures the CloudEvent structure with data as RawMessage
 	type cloudEventJSON struct {
 		SpecVersion     string          `json:"specversion"`
@@ -323,7 +259,7 @@ func parseCloudEventWithTypedData[T any](data []byte) (*TypedEventMessage[T], er
 		}
 	}
 
-	return &TypedEventMessage[T]{
+	return &EventMessage[T]{
 		ID:       ceJSON.ID,
 		Type:     ceJSON.Type,
 		Source:   ceJSON.Source,
@@ -332,24 +268,24 @@ func parseCloudEventWithTypedData[T any](data []byte) (*TypedEventMessage[T], er
 	}, nil
 }
 
-// watermillMessageToTypedEventMessage converts a watermill message to a TypedEventMessage
+// watermillMessageToEventMessage converts a watermill message to an EventMessage
 // This avoids double marshalling by using json.RawMessage
-func watermillMessageToTypedEventMessage[T any](msg *message.Message) (*TypedEventMessage[T], error) {
+func watermillMessageToEventMessage[T any](msg *message.Message) (*EventMessage[T], error) {
 	// Parse CloudEvent with typed data extraction
-	typedMsg, err := parseCloudEventWithTypedData[T](msg.Payload)
+	eventMsg, err := parseCloudEventWithTypedData[T](msg.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse CloudEvent with typed data: %w", err)
 	}
 
 	// Merge watermill message metadata with CloudEvent extensions
 	for k, v := range msg.Metadata {
-		if typedMsg.Metadata == nil {
-			typedMsg.Metadata = make(map[string]string)
+		if eventMsg.Metadata == nil {
+			eventMsg.Metadata = make(map[string]string)
 		}
-		typedMsg.Metadata[k] = v
+		eventMsg.Metadata[k] = v
 	}
 
-	return typedMsg, nil
+	return eventMsg, nil
 }
 
 // RabbitMQConfig holds configuration for RabbitMQ Pub/Sub
@@ -368,57 +304,39 @@ type GooglePubSubConfig struct {
 	GenerateSubscriptionName func(topic string) string
 }
 
-// withPanicRecovery wraps a message handler with panic recovery
-func withPanicRecovery(handler MessageHandler, logger watermill.LoggerAdapter, topic, messageID string) MessageHandler {
-	return func(ctx context.Context, msg *EventMessage) (err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				stack := debug.Stack()
-				logger.Error("panic recovered in message handler", fmt.Errorf("panic: %v", r), watermill.LogFields{
-					"topic":      topic,
-					"message_id": messageID,
-					"stack":      string(stack),
-				})
-				err = fmt.Errorf("panic recovered: %v", r)
-			}
-		}()
-		return handler(ctx, msg)
-	}
-}
-
 // messageJob represents a job to be processed by a worker
-type messageJob struct {
+type messageJob[T any] struct {
 	msg     *message.Message
-	handler MessageHandler
+	handler MessageHandler[T]
 	ctx     context.Context
 	logger  watermill.LoggerAdapter
 	topic   string
 }
 
 // workerPool manages a pool of workers for processing messages
-type workerPool struct {
+type workerPool[T any] struct {
 	workers int
-	jobChan chan messageJob
+	jobChan chan messageJob[T]
 	logger  watermill.LoggerAdapter
 	topic   string
 	wg      sync.WaitGroup
 }
 
 // newWorkerPool creates a new worker pool
-func newWorkerPool(workers int, logger watermill.LoggerAdapter, topic string) *workerPool {
+func newWorkerPool[T any](workers int, logger watermill.LoggerAdapter, topic string) *workerPool[T] {
 	if workers <= 0 {
 		workers = 1
 	}
-	return &workerPool{
+	return &workerPool[T]{
 		workers: workers,
-		jobChan: make(chan messageJob, workers*2), // Buffer size: 2x workers
+		jobChan: make(chan messageJob[T], workers*2), // Buffer size: 2x workers
 		logger:  logger,
 		topic:   topic,
 	}
 }
 
 // start starts the worker pool
-func (wp *workerPool) start(ctx context.Context) {
+func (wp *workerPool[T]) start(ctx context.Context) {
 	for i := 0; i < wp.workers; i++ {
 		wp.wg.Add(1)
 		go wp.worker(ctx, i)
@@ -426,7 +344,7 @@ func (wp *workerPool) start(ctx context.Context) {
 }
 
 // worker processes messages from the job channel
-func (wp *workerPool) worker(ctx context.Context, id int) {
+func (wp *workerPool[T]) worker(ctx context.Context, id int) {
 	defer wp.wg.Done()
 
 	for {
@@ -448,7 +366,7 @@ func (wp *workerPool) worker(ctx context.Context, id int) {
 }
 
 // processJob processes a single message job with panic recovery
-func (wp *workerPool) processJob(ctx context.Context, job messageJob, workerID int) {
+func (wp *workerPool[T]) processJob(ctx context.Context, job messageJob[T], workerID int) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -462,8 +380,8 @@ func (wp *workerPool) processJob(ctx context.Context, job messageJob, workerID i
 		}
 	}()
 
-	// Convert watermill message to EventMessage
-	eventMsg, err := watermillMessageToEventMessage(job.msg)
+	// Convert watermill message to EventMessage (avoids double marshalling)
+	eventMsg, err := watermillMessageToEventMessage[T](job.msg)
 	if err != nil {
 		wp.logger.Error("failed to convert message to EventMessage", err, watermill.LogFields{
 			"worker_id":  workerID,
@@ -475,9 +393,22 @@ func (wp *workerPool) processJob(ctx context.Context, job messageJob, workerID i
 	}
 
 	// Wrap handler with panic recovery
-	safeHandler := withPanicRecovery(job.handler, wp.logger, wp.topic, job.msg.UUID)
+	safeHandler := func(ctx context.Context, msg *EventMessage[T]) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				wp.logger.Error("panic recovered in message handler", fmt.Errorf("panic: %v", r), watermill.LogFields{
+					"topic":      wp.topic,
+					"message_id": job.msg.UUID,
+					"stack":      string(stack),
+				})
+				err = fmt.Errorf("panic recovered: %v", r)
+			}
+		}()
+		return job.handler(ctx, msg)
+	}
 
-	// Process message using the job's context (from Subscribe)
+	// Process message using the job's context
 	if err := safeHandler(job.ctx, eventMsg); err != nil {
 		wp.logger.Error("failed to handle message", err, watermill.LogFields{
 			"worker_id":  workerID,
@@ -492,7 +423,7 @@ func (wp *workerPool) processJob(ctx context.Context, job messageJob, workerID i
 }
 
 // submit submits a job to the worker pool
-func (wp *workerPool) submit(job messageJob) {
+func (wp *workerPool[T]) submit(job messageJob[T]) {
 	select {
 	case wp.jobChan <- job:
 		// Job submitted successfully
@@ -506,145 +437,7 @@ func (wp *workerPool) submit(job messageJob) {
 }
 
 // stop stops the worker pool gracefully
-func (wp *workerPool) stop() {
-	close(wp.jobChan)
-	wp.wg.Wait()
-}
-
-// typedMessageJob represents a job to be processed by a typed worker
-type typedMessageJob[T any] struct {
-	msg     *message.Message
-	handler TypedMessageHandler[T]
-	ctx     context.Context
-	logger  watermill.LoggerAdapter
-	topic   string
-}
-
-// typedWorkerPool manages a pool of workers for processing typed messages
-type typedWorkerPool[T any] struct {
-	workers int
-	jobChan chan typedMessageJob[T]
-	logger  watermill.LoggerAdapter
-	topic   string
-	wg      sync.WaitGroup
-}
-
-// newTypedWorkerPool creates a new typed worker pool
-func newTypedWorkerPool[T any](workers int, logger watermill.LoggerAdapter, topic string) *typedWorkerPool[T] {
-	if workers <= 0 {
-		workers = 1
-	}
-	return &typedWorkerPool[T]{
-		workers: workers,
-		jobChan: make(chan typedMessageJob[T], workers*2), // Buffer size: 2x workers
-		logger:  logger,
-		topic:   topic,
-	}
-}
-
-// start starts the typed worker pool
-func (wp *typedWorkerPool[T]) start(ctx context.Context) {
-	for i := 0; i < wp.workers; i++ {
-		wp.wg.Add(1)
-		go wp.worker(ctx, i)
-	}
-}
-
-// worker processes typed messages from the job channel
-func (wp *typedWorkerPool[T]) worker(ctx context.Context, id int) {
-	defer wp.wg.Done()
-
-	for {
-		select {
-		case <-ctx.Done():
-			wp.logger.Info("typed worker shutting down", watermill.LogFields{
-				"worker_id": id,
-				"topic":     wp.topic,
-			})
-			return
-		case job, ok := <-wp.jobChan:
-			if !ok {
-				// Channel closed, exit
-				return
-			}
-			wp.processJob(ctx, job, id)
-		}
-	}
-}
-
-// processJob processes a single typed message job with panic recovery
-func (wp *typedWorkerPool[T]) processJob(ctx context.Context, job typedMessageJob[T], workerID int) {
-	defer func() {
-		if r := recover(); r != nil {
-			stack := debug.Stack()
-			wp.logger.Error("panic recovered in typed worker", fmt.Errorf("panic: %v", r), watermill.LogFields{
-				"worker_id":  workerID,
-				"topic":      wp.topic,
-				"message_id": job.msg.UUID,
-				"stack":      string(stack),
-			})
-			job.msg.Nack()
-		}
-	}()
-
-	// Convert watermill message to TypedEventMessage (avoids double marshalling)
-	typedMsg, err := watermillMessageToTypedEventMessage[T](job.msg)
-	if err != nil {
-		wp.logger.Error("failed to convert message to TypedEventMessage", err, watermill.LogFields{
-			"worker_id":  workerID,
-			"topic":      wp.topic,
-			"message_id": job.msg.UUID,
-		})
-		job.msg.Nack()
-		return
-	}
-
-	// Wrap handler with panic recovery
-	safeHandler := func(ctx context.Context, msg *TypedEventMessage[T]) (err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				stack := debug.Stack()
-				wp.logger.Error("panic recovered in typed message handler", fmt.Errorf("panic: %v", r), watermill.LogFields{
-					"topic":      wp.topic,
-					"message_id": job.msg.UUID,
-					"stack":      string(stack),
-				})
-				err = fmt.Errorf("panic recovered: %v", r)
-			}
-		}()
-		return job.handler(ctx, msg)
-	}
-
-	// Process message using the job's context (from SubscribeTyped)
-	if err := safeHandler(job.ctx, typedMsg); err != nil {
-		wp.logger.Error("failed to handle typed message", err, watermill.LogFields{
-			"worker_id":  workerID,
-			"topic":      wp.topic,
-			"message_id": job.msg.UUID,
-		})
-		job.msg.Nack()
-		return
-	}
-
-	job.msg.Ack()
-}
-
-// submit submits a typed job to the worker pool
-func (wp *typedWorkerPool[T]) submit(job typedMessageJob[T]) {
-	select {
-	case wp.jobChan <- job:
-		// Job submitted successfully
-	default:
-		wp.logger.Error("typed worker pool job channel full, dropping message", nil, watermill.LogFields{
-			"topic":      wp.topic,
-			"message_id": job.msg.UUID,
-		})
-		job.msg.Nack()
-	}
-}
-
-// stop stops the typed worker pool gracefully
-func (wp *typedWorkerPool[T]) stop() {
+func (wp *workerPool[T]) stop() {
 	close(wp.jobChan)
 	wp.wg.Wait()
 }

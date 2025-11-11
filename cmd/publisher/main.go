@@ -25,7 +25,7 @@ func main() {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	var ps pubsub.PubSub
+	var ps interface{ Close() error }
 	var err error
 	switch *brokerType {
 	case "rabbitmq":
@@ -45,10 +45,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	runPublisher(ctx, ps, *topic, logger)
+	runPublisher(ctx, ps, *brokerType, *topic, logger)
 }
 
-func runPublisher(ctx context.Context, ps pubsub.Publisher, topic string, logger watermill.LoggerAdapter) {
+func runPublisher(ctx context.Context, ps interface{ Close() error }, brokerType, topic string, logger watermill.LoggerAdapter) {
 	logger.Info("Starting publisher", watermill.LogFields{"topic": topic})
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -76,16 +76,26 @@ func runPublisher(ctx context.Context, ps pubsub.Publisher, topic string, logger
 			}
 
 			// Create EventMessage with NodePoolEvent as the payload type
-			eventMsg := &pubsub.EventMessage{
+			eventMsg := &pubsub.EventMessage[events.NodePoolEvent]{
 				ID:       fmt.Sprintf("event-%d", messageCount),
 				Type:     events.CloudEventType,
 				Source:   "watermill-publisher",
-				Payload:  nodePoolEvent,
+				Payload:  *nodePoolEvent,
 				Metadata: map[string]string{"count": fmt.Sprintf("%d", messageCount)},
 			}
 
-			// Publish EventMessage (conversion to CloudEvent happens internally)
-			if err := ps.Publish(ctx, topic, eventMsg); err != nil {
+			// Publish EventMessage using type assertion
+			var err error
+			switch p := ps.(type) {
+			case *pubsub.RabbitMQPubSub:
+				err = pubsub.PublishRabbitMQ(ctx, p, topic, eventMsg)
+			case *pubsub.GooglePubSubPubSub:
+				err = pubsub.PublishGooglePubSub(ctx, p, topic, eventMsg)
+			default:
+				log.Fatalf("Unsupported pubsub type for publishing: %T", ps)
+			}
+
+			if err != nil {
 				logger.Error("Failed to publish EventMessage", err, watermill.LogFields{
 					"topic":      topic,
 					"message_id": eventMsg.ID,

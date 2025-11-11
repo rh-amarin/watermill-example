@@ -29,7 +29,7 @@ func main() {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	var ps pubsub.PubSub
+	var ps interface{ Close() error }
 	var err error
 	switch *brokerType {
 	case "rabbitmq":
@@ -52,14 +52,14 @@ func main() {
 	runSubscriber(ctx, ps, *topic, *subscriberID, logger)
 }
 
-func runSubscriber(ctx context.Context, ps pubsub.PubSub, topic, subscriberID string, logger watermill.LoggerAdapter) {
+func runSubscriber(ctx context.Context, ps interface{ Close() error }, topic, subscriberID string, logger watermill.LoggerAdapter) {
 	logger.Info("Starting subscriber", watermill.LogFields{
 		"topic":         topic,
 		"subscriber_id": subscriberID,
 	})
 
-	// Use SubscribeTyped to avoid double marshalling - payload is already typed!
-	handler := func(ctx context.Context, msg *pubsub.TypedEventMessage[events.NodePoolEvent]) error {
+	// Use Subscribe to avoid double marshalling - payload is already typed!
+	handler := func(ctx context.Context, msg *pubsub.EventMessage[events.NodePoolEvent]) error {
 		// No double marshalling! msg.Payload is already events.NodePoolEvent
 		logger.Info("Received CloudEvent", watermill.LogFields{
 			"subscriber_id": subscriberID,
@@ -79,15 +79,15 @@ func runSubscriber(ctx context.Context, ps pubsub.PubSub, topic, subscriberID st
 		return nil
 	}
 
-	// Type assert to concrete type to access SubscribeTyped function
+	// Type assert to concrete type to access Subscribe function
 	// Since Go doesn't support generic methods on non-generic types, we use standalone functions
 	switch p := ps.(type) {
 	case *pubsub.RabbitMQPubSub:
-		if err := pubsub.SubscribeTypedRabbitMQ(ctx, p, topic, handler); err != nil {
+		if err := pubsub.SubscribeRabbitMQ(ctx, p, topic, handler); err != nil {
 			log.Fatalf("Failed to subscribe: %v", err)
 		}
 	case *pubsub.GooglePubSubPubSub:
-		if err := pubsub.SubscribeTypedGooglePubSub(ctx, p, topic, handler); err != nil {
+		if err := pubsub.SubscribeGooglePubSub(ctx, p, topic, handler); err != nil {
 			log.Fatalf("Failed to subscribe: %v", err)
 		}
 	default:

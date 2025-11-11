@@ -12,6 +12,10 @@ import (
 )
 
 func TestWatermillMessageToEventMessage(t *testing.T) {
+	type TestPayload struct {
+		Message string `json:"message"`
+	}
+
 	t.Run("ValidCloudEvent", func(t *testing.T) {
 		// Create a CloudEvent JSON payload
 		cloudEventJSON := `{
@@ -30,13 +34,13 @@ func TestWatermillMessageToEventMessage(t *testing.T) {
 		watermillMsg.Metadata.Set("key1", "value1")
 		watermillMsg.Metadata.Set("key2", "value2")
 
-		eventMsg, err := watermillMessageToEventMessage(watermillMsg)
+		eventMsg, err := watermillMessageToEventMessage[TestPayload](watermillMsg)
 		require.NoError(t, err)
 
 		assert.Equal(t, "test-id-123", eventMsg.ID)
 		assert.Equal(t, "test.type", eventMsg.Type)
 		assert.Equal(t, "test.source", eventMsg.Source)
-		assert.NotNil(t, eventMsg.Payload)
+		assert.Equal(t, "hello", eventMsg.Payload.Message)
 		assert.Equal(t, "value1", eventMsg.Metadata["key1"])
 		assert.Equal(t, "value2", eventMsg.Metadata["key2"])
 	})
@@ -48,7 +52,7 @@ func TestWatermillMessageToEventMessage(t *testing.T) {
 			Metadata: make(message.Metadata),
 		}
 
-		_, err := watermillMessageToEventMessage(watermillMsg)
+		_, err := watermillMessageToEventMessage[TestPayload](watermillMsg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse CloudEvent")
 	})
@@ -80,12 +84,12 @@ func TestNewPubSub(t *testing.T) {
 
 func TestMessageHandler(t *testing.T) {
 	t.Run("HandlerSignature", func(t *testing.T) {
-		var handler MessageHandler = func(ctx context.Context, msg *EventMessage) error {
+		var handler MessageHandler[string] = func(ctx context.Context, msg *EventMessage[string]) error {
 			return nil
 		}
 
 		ctx := context.Background()
-		msg := &EventMessage{
+		msg := &EventMessage[string]{
 			ID:      uuid.New().String(),
 			Type:    "test.type",
 			Source:  "test.source",
@@ -122,32 +126,5 @@ func TestErrors(t *testing.T) {
 		assert.Error(t, ErrUnsupportedBrokerType)
 		assert.Error(t, ErrPublisherNotInitialized)
 		assert.Error(t, ErrSubscriberNotInitialized)
-	})
-}
-
-// Integration test helpers (these would require actual broker connections)
-func TestPubSubInterface(t *testing.T) {
-	t.Run("PublisherInterface", func(t *testing.T) {
-		var pub Publisher
-		var r *RabbitMQPubSub
-		pub = r
-		_ = pub              // Verify it compiles
-		assert.True(t, true) // Interface is satisfied
-	})
-
-	t.Run("SubscriberInterface", func(t *testing.T) {
-		var sub Subscriber
-		var r *RabbitMQPubSub
-		sub = r
-		_ = sub              // Verify it compiles
-		assert.True(t, true) // Interface is satisfied
-	})
-
-	t.Run("PubSubInterface", func(t *testing.T) {
-		var ps PubSub
-		var r *RabbitMQPubSub
-		ps = r
-		_ = ps               // Verify it compiles
-		assert.True(t, true) // Interface is satisfied
 	})
 }

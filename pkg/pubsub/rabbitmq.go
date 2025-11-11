@@ -17,7 +17,7 @@ type RabbitMQPubSub struct {
 }
 
 // NewRabbitMQPubSub creates a new RabbitMQ PubSub instance
-func NewRabbitMQPubSub(config RabbitMQConfig) (PubSub, error) {
+func NewRabbitMQPubSub(config RabbitMQConfig) (*RabbitMQPubSub, error) {
 	if config.URL == "" {
 		return nil, fmt.Errorf("rabbitmq url is required")
 	}
@@ -47,8 +47,9 @@ func NewRabbitMQPubSub(config RabbitMQConfig) (PubSub, error) {
 	}, nil
 }
 
-// Publish publishes an EventMessage to the specified topic
-func (r *RabbitMQPubSub) Publish(ctx context.Context, topic string, event *EventMessage) error {
+// PublishRabbitMQ publishes a typed EventMessage to the specified topic
+// This is a standalone generic function since Go doesn't support generic methods on non-generic types
+func PublishRabbitMQ[T any](ctx context.Context, r *RabbitMQPubSub, topic string, event *EventMessage[T]) error {
 	if r.publisher == nil {
 		return ErrPublisherNotInitialized
 	}
@@ -61,8 +62,9 @@ func (r *RabbitMQPubSub) Publish(ctx context.Context, topic string, event *Event
 	return r.publisher.Publish(topic, watermillMsg)
 }
 
-// Subscribe subscribes to messages from the specified topic
-func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
+// SubscribeRabbitMQ subscribes to messages with typed payloads, avoiding double marshalling
+// This is a standalone generic function since Go doesn't support generic methods on non-generic types
+func SubscribeRabbitMQ[T any](ctx context.Context, r *RabbitMQPubSub, topic string, handler MessageHandler[T]) error {
 	if r.subscriber == nil {
 		return ErrSubscriberNotInitialized
 	}
@@ -73,7 +75,7 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 	}
 
 	// Create and start worker pool
-	pool := newWorkerPool(r.workerPoolSize, r.logger, topic)
+	pool := newWorkerPool[T](r.workerPoolSize, r.logger, topic)
 	pool.start(ctx)
 
 	// Start message loop goroutine
@@ -97,58 +99,7 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 				}
 
 				// Submit job to worker pool
-				pool.submit(messageJob{
-					msg:     msg,
-					handler: handler,
-					ctx:     ctx,
-					logger:  r.logger,
-					topic:   topic,
-				})
-			}
-		}
-	}()
-
-	return nil
-}
-
-// SubscribeTyped subscribes to messages with typed payloads, avoiding double marshalling
-// This is a standalone generic function since Go doesn't support generic methods on non-generic types
-func SubscribeTypedRabbitMQ[T any](ctx context.Context, r *RabbitMQPubSub, topic string, handler TypedMessageHandler[T]) error {
-	if r.subscriber == nil {
-		return ErrSubscriberNotInitialized
-	}
-
-	messages, err := r.subscriber.Subscribe(ctx, topic)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
-	}
-
-	// Create and start typed worker pool
-	pool := newTypedWorkerPool[T](r.workerPoolSize, r.logger, topic)
-	pool.start(ctx)
-
-	// Start message loop goroutine
-	go func() {
-		defer pool.stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				r.logger.Info("typed subscribe loop cancelled, shutting down", watermill.LogFields{
-					"topic": topic,
-				})
-				return
-			case msg, ok := <-messages:
-				if !ok {
-					// Channel closed
-					r.logger.Info("message channel closed", watermill.LogFields{
-						"topic": topic,
-					})
-					return
-				}
-
-				// Submit job to typed worker pool
-				pool.submit(typedMessageJob[T]{
+				pool.submit(messageJob[T]{
 					msg:     msg,
 					handler: handler,
 					ctx:     ctx,
