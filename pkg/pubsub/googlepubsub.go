@@ -134,6 +134,57 @@ func (g *GooglePubSubPubSub) Subscribe(ctx context.Context, topic string, handle
 	return nil
 }
 
+// SubscribeTyped subscribes to messages with typed payloads, avoiding double marshalling
+// This is a standalone generic function since Go doesn't support generic methods on non-generic types
+func SubscribeTypedGooglePubSub[T any](ctx context.Context, g *GooglePubSubPubSub, topic string, handler TypedMessageHandler[T]) error {
+	if g.subscriber == nil {
+		return ErrSubscriberNotInitialized
+	}
+
+	messages, err := g.subscriber.Subscribe(ctx, topic)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	// Create and start typed worker pool
+	pool := newTypedWorkerPool[T](g.workerPoolSize, g.logger, topic)
+	pool.start(ctx)
+
+	// Start message loop goroutine
+	go func() {
+		defer pool.stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				g.logger.Info("typed subscribe loop cancelled, shutting down", watermill.LogFields{
+					"topic": topic,
+				})
+				return
+			case msg, ok := <-messages:
+				if !ok {
+					// Channel closed
+					g.logger.Info("message channel closed", watermill.LogFields{
+						"topic": topic,
+					})
+					return
+				}
+
+				// Submit job to typed worker pool
+				pool.submit(typedMessageJob[T]{
+					msg:     msg,
+					handler: handler,
+					ctx:     ctx,
+					logger:  g.logger,
+					topic:   topic,
+				})
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Close closes the publisher and subscriber
 func (g *GooglePubSubPubSub) Close() error {
 	var errs []error

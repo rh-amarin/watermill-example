@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -53,42 +52,25 @@ func main() {
 	runSubscriber(ctx, ps, *topic, *subscriberID, logger)
 }
 
-func runSubscriber(ctx context.Context, ps pubsub.Subscriber, topic, subscriberID string, logger watermill.LoggerAdapter) {
+func runSubscriber(ctx context.Context, ps pubsub.PubSub, topic, subscriberID string, logger watermill.LoggerAdapter) {
 	logger.Info("Starting subscriber", watermill.LogFields{
 		"topic":         topic,
 		"subscriber_id": subscriberID,
 	})
 
-	handler := func(ctx context.Context, msg *pubsub.EventMessage) error {
-		// Extract NodePoolEvent from EventMessage payload
-		var nodePoolEvent events.NodePoolEvent
-		if msg.Payload != nil {
-			// Marshal payload to JSON and unmarshal into NodePoolEvent
-			dataBytes, err := json.Marshal(msg.Payload)
-			if err != nil {
-				logger.Error("Failed to marshal EventMessage payload", err, watermill.LogFields{
-					"message_id": msg.ID,
-				})
-				return err
-			}
-			if err := json.Unmarshal(dataBytes, &nodePoolEvent); err != nil {
-				logger.Error("Failed to unmarshal NodePoolEvent", err, watermill.LogFields{
-					"message_id": msg.ID,
-				})
-				return err
-			}
-		}
-
+	// Use SubscribeTyped to avoid double marshalling - payload is already typed!
+	handler := func(ctx context.Context, msg *pubsub.TypedEventMessage[events.NodePoolEvent]) error {
+		// No double marshalling! msg.Payload is already events.NodePoolEvent
 		logger.Info("Received CloudEvent", watermill.LogFields{
 			"subscriber_id": subscriberID,
 			"message_id":    msg.ID,
 			"ce_id":         msg.ID,
 			"ce_type":       msg.Type,
 			"ce_source":     msg.Source,
-			"cluster_id":    nodePoolEvent.ClusterID,
-			"nodepool_id":   nodePoolEvent.ID,
-			"href":          nodePoolEvent.Href,
-			"generation":    nodePoolEvent.Generation,
+			"cluster_id":    msg.Payload.ClusterID, // Direct access, no marshalling needed!
+			"nodepool_id":   msg.Payload.ID,
+			"href":          msg.Payload.Href,
+			"generation":    msg.Payload.Generation,
 		})
 
 		// Simulate processing time
@@ -97,8 +79,19 @@ func runSubscriber(ctx context.Context, ps pubsub.Subscriber, topic, subscriberI
 		return nil
 	}
 
-	if err := ps.Subscribe(ctx, topic, handler); err != nil {
-		log.Fatalf("Failed to subscribe: %v", err)
+	// Type assert to concrete type to access SubscribeTyped function
+	// Since Go doesn't support generic methods on non-generic types, we use standalone functions
+	switch p := ps.(type) {
+	case *pubsub.RabbitMQPubSub:
+		if err := pubsub.SubscribeTypedRabbitMQ(ctx, p, topic, handler); err != nil {
+			log.Fatalf("Failed to subscribe: %v", err)
+		}
+	case *pubsub.GooglePubSubPubSub:
+		if err := pubsub.SubscribeTypedGooglePubSub(ctx, p, topic, handler); err != nil {
+			log.Fatalf("Failed to subscribe: %v", err)
+		}
+	default:
+		log.Fatalf("Unsupported pubsub type for typed subscription: %T", ps)
 	}
 
 	sigChan := make(chan os.Signal, 1)

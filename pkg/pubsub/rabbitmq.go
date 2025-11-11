@@ -111,6 +111,57 @@ func (r *RabbitMQPubSub) Subscribe(ctx context.Context, topic string, handler Me
 	return nil
 }
 
+// SubscribeTyped subscribes to messages with typed payloads, avoiding double marshalling
+// This is a standalone generic function since Go doesn't support generic methods on non-generic types
+func SubscribeTypedRabbitMQ[T any](ctx context.Context, r *RabbitMQPubSub, topic string, handler TypedMessageHandler[T]) error {
+	if r.subscriber == nil {
+		return ErrSubscriberNotInitialized
+	}
+
+	messages, err := r.subscriber.Subscribe(ctx, topic)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	// Create and start typed worker pool
+	pool := newTypedWorkerPool[T](r.workerPoolSize, r.logger, topic)
+	pool.start(ctx)
+
+	// Start message loop goroutine
+	go func() {
+		defer pool.stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				r.logger.Info("typed subscribe loop cancelled, shutting down", watermill.LogFields{
+					"topic": topic,
+				})
+				return
+			case msg, ok := <-messages:
+				if !ok {
+					// Channel closed
+					r.logger.Info("message channel closed", watermill.LogFields{
+						"topic": topic,
+					})
+					return
+				}
+
+				// Submit job to typed worker pool
+				pool.submit(typedMessageJob[T]{
+					msg:     msg,
+					handler: handler,
+					ctx:     ctx,
+					logger:  r.logger,
+					topic:   topic,
+				})
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Close closes the publisher and subscriber
 func (r *RabbitMQPubSub) Close() error {
 	var errs []error

@@ -357,7 +357,7 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 }
 
 func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
-	t.Parallel()
+	//t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
