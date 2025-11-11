@@ -11,32 +11,20 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
-	"github.com/asyncapi-cloudevents/watermill-abstraction/internal/config"
 	"github.com/asyncapi-cloudevents/watermill-abstraction/pkg/events"
 	"github.com/asyncapi-cloudevents/watermill-abstraction/pkg/pubsub"
 )
 
 func main() {
 	var (
-		brokerType = flag.String("broker", "rabbitmq", "Broker type: rabbitmq or googlepubsub")
-		topic      = flag.String("topic", "test-topic", "Topic name")
+		topic = flag.String("topic", "test-topic", "Topic name")
 	)
 	flag.Parse()
 
 	logger := watermill.NewStdLogger(false, false)
 
-	var ps interface{ Close() error }
-	var err error
-	switch *brokerType {
-	case "rabbitmq":
-		rmqq := config.LoadRabbitMQConfig(logger)
-		ps, err = pubsub.NewRabbitMQPubSub(rmqq)
-	case "googlepubsub":
-		gcfg := config.LoadGooglePubSubConfig(logger)
-		ps, err = pubsub.NewGooglePubSub(gcfg)
-	default:
-		log.Fatalf("Unsupported broker type: %s", *brokerType)
-	}
+	// Use factory function to create PubSub from configuration
+	ps, err := pubsub.NewPubSubFromConfig(logger)
 	if err != nil {
 		log.Fatalf("Failed to create pubsub: %v", err)
 	}
@@ -45,10 +33,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	runPublisher(ctx, ps, *brokerType, *topic, logger)
+	runPublisher(ctx, ps, *topic, logger)
 }
 
-func runPublisher(ctx context.Context, ps interface{ Close() error }, brokerType, topic string, logger watermill.LoggerAdapter) {
+func runPublisher(ctx context.Context, ps interface{ Close() error }, topic string, logger watermill.LoggerAdapter) {
 	logger.Info("Starting publisher", watermill.LogFields{"topic": topic})
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -84,18 +72,8 @@ func runPublisher(ctx context.Context, ps interface{ Close() error }, brokerType
 				Metadata: map[string]string{"count": fmt.Sprintf("%d", messageCount)},
 			}
 
-			// Publish EventMessage using type assertion
-			var err error
-			switch p := ps.(type) {
-			case *pubsub.RabbitMQPubSub:
-				err = pubsub.PublishRabbitMQ(ctx, p, topic, eventMsg)
-			case *pubsub.GooglePubSubPubSub:
-				err = pubsub.PublishGooglePubSub(ctx, p, topic, eventMsg)
-			default:
-				log.Fatalf("Unsupported pubsub type for publishing: %T", ps)
-			}
-
-			if err != nil {
+			// Publish EventMessage using unified Publish function
+			if err := pubsub.Publish(ctx, ps, topic, eventMsg); err != nil {
 				logger.Error("Failed to publish EventMessage", err, watermill.LogFields{
 					"topic":      topic,
 					"message_id": eventMsg.ID,

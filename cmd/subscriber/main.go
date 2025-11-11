@@ -10,14 +10,12 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
-	"github.com/asyncapi-cloudevents/watermill-abstraction/internal/config"
 	"github.com/asyncapi-cloudevents/watermill-abstraction/pkg/events"
 	"github.com/asyncapi-cloudevents/watermill-abstraction/pkg/pubsub"
 )
 
 func main() {
 	var (
-		brokerType   = flag.String("broker", "rabbitmq", "Broker type: rabbitmq or googlepubsub")
 		topic        = flag.String("topic", "test-topic", "Topic name")
 		subscriberID = flag.String("subscriber-id", "", "Subscriber ID (required)")
 	)
@@ -29,18 +27,8 @@ func main() {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	var ps interface{ Close() error }
-	var err error
-	switch *brokerType {
-	case "rabbitmq":
-		rmqq := config.LoadRabbitMQConfig(logger)
-		ps, err = pubsub.NewRabbitMQPubSub(rmqq)
-	case "googlepubsub":
-		gcfg := config.LoadGooglePubSubConfig(logger)
-		ps, err = pubsub.NewGooglePubSub(gcfg)
-	default:
-		log.Fatalf("Unsupported broker type: %s", *brokerType)
-	}
+	// Use factory function to create PubSub from configuration
+	ps, err := pubsub.NewPubSubFromConfig(logger)
 	if err != nil {
 		log.Fatalf("Failed to create pubsub: %v", err)
 	}
@@ -79,19 +67,9 @@ func runSubscriber(ctx context.Context, ps interface{ Close() error }, topic, su
 		return nil
 	}
 
-	// Type assert to concrete type to access Subscribe function
-	// Since Go doesn't support generic methods on non-generic types, we use standalone functions
-	switch p := ps.(type) {
-	case *pubsub.RabbitMQPubSub:
-		if err := pubsub.SubscribeRabbitMQ(ctx, p, topic, handler); err != nil {
-			log.Fatalf("Failed to subscribe: %v", err)
-		}
-	case *pubsub.GooglePubSubPubSub:
-		if err := pubsub.SubscribeGooglePubSub(ctx, p, topic, handler); err != nil {
-			log.Fatalf("Failed to subscribe: %v", err)
-		}
-	default:
-		log.Fatalf("Unsupported pubsub type for typed subscription: %T", ps)
+	// Use Subscribe function that hides broker implementation details
+	if err := pubsub.Subscribe(ctx, ps, topic, handler); err != nil {
+		log.Fatalf("Failed to subscribe: %v", err)
 	}
 
 	sigChan := make(chan os.Signal, 1)

@@ -1,0 +1,41 @@
+# Broker Configuration File
+# This file can be overridden by environment variables prefixed with BROKER_
+# Example: BROKER_TYPE=googlepubsub or BROKER_RABBITMQ_URL=amqp://...
+
+# Broker type: "rabbitmq" or "googlepubsub"
+# Can be overridden with BROKER_TYPE
+type: rabbitmq
+
+# RabbitMQ Configuration
+# All settings can be overridden with BROKER_RABBITMQ_* environment variables
+rabbitmq:
+  # RabbitMQ connection URL
+  # Can be overridden with BROKER_RABBITMQ_URL
+  url: "amqp://guest:guest@localhost:5672/"
+  
+  # Worker pool size for processing messages
+  # Can be overridden with BROKER_RABBITMQ_WORKER_POOL_SIZE
+  worker_pool_size: 1
+
+# Google Pub/Sub Configuration
+# All settings can be overridden with BROKER_GOOGLEPUBSUB_* environment variables
+googlepubsub:
+  # Google Cloud Project ID (required for Google Pub/Sub)
+  # Can be overridden with BROKER_GOOGLEPUBSUB_PROJECT_ID
+  project_id: "my-gcp-project"
+  
+  # Path to Google Cloud credentials JSON file (optional)
+  # Can be overridden with BROKER_GOOGLEPUBSUB_CREDENTIALS_PATH
+  # If not provided, uses default credentials (e.g., from gcloud auth)
+  credentials_path: ""
+  
+  # Worker pool size for processing messages
+  # Can be overridden with BROKER_GOOGLEPUBSUB_WORKER_POOL_SIZE
+  worker_pool_size: 1
+  
+  # Subscription name generation pattern (optional)
+  # Can use %s placeholder for topic name
+  # Can be overridden with BROKER_GOOGLEPUBSUB_GENERATE_SUBSCRIPTION_NAME
+  # Example: "sub-%s" will create subscriptions like "sub-my-topic"
+  generate_subscription_name: ""
+

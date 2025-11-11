@@ -3,13 +3,17 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/spf13/viper"
 )
 
 // EventMessage represents an event message with a typed payload
@@ -302,6 +306,154 @@ type GooglePubSubConfig struct {
 	CredentialsPath          string
 	WorkerPoolSize           int
 	GenerateSubscriptionName func(topic string) string
+}
+
+// BrokerConfig holds the broker configuration loaded from file/environment
+type BrokerConfig struct {
+	Type string `mapstructure:"type"` // "rabbitmq" or "googlepubsub"
+
+	// RabbitMQ configuration
+	RabbitMQ struct {
+		URL            string `mapstructure:"url"`
+		WorkerPoolSize int    `mapstructure:"worker_pool_size"`
+	} `mapstructure:"rabbitmq"`
+
+	// Google Pub/Sub configuration
+	GooglePubSub struct {
+		ProjectID                string `mapstructure:"project_id"`
+		CredentialsPath          string `mapstructure:"credentials_path"`
+		WorkerPoolSize           int    `mapstructure:"worker_pool_size"`
+		GenerateSubscriptionName string `mapstructure:"generate_subscription_name"` // Optional: function name or pattern
+	} `mapstructure:"googlepubsub"`
+}
+
+// LoadBrokerConfig loads broker configuration from file and environment variables
+// Configuration file defaults to "broker.yaml" but can be overridden via BROKER_CONFIG_FILE env var
+// All settings can be overridden via environment variables prefixed with BROKER_
+func LoadBrokerConfig() (*BrokerConfig, error) {
+	v := viper.New()
+
+	// Set default config file name
+	configFile := os.Getenv("BROKER_CONFIG_FILE")
+	if configFile == "" {
+		configFile = "broker.yaml"
+	}
+
+	// Set config file path and type
+	v.SetConfigFile(configFile)
+	v.SetConfigType("yaml")
+
+	// Read config file (optional - won't fail if file doesn't exist)
+	if err := v.ReadInConfig(); err != nil {
+		// If file doesn't exist, that's okay - we'll use env vars only
+		// Check if it's a ConfigFileNotFoundError
+		var configFileNotFoundErr viper.ConfigFileNotFoundError
+		if !errors.As(err, &configFileNotFoundErr) {
+			// Also check if it's a file not found error
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("failed to read config file %s: %w", configFile, err)
+			}
+		}
+	}
+
+	// Enable environment variable overrides
+	v.SetEnvPrefix("BROKER")
+	v.AutomaticEnv()
+	// Replace dots with underscores for environment variables
+	// e.g., BROKER_RABBITMQ_URL instead of BROKER.RABBITMQ.URL
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Set defaults
+	v.SetDefault("type", "rabbitmq")
+	v.SetDefault("rabbitmq.worker_pool_size", 1)
+	v.SetDefault("googlepubsub.worker_pool_size", 1)
+
+	// Unmarshal into config struct
+	var config BrokerConfig
+	if err := v.Unmarshal(&config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	return &config, nil
+}
+
+// Subscribe subscribes to messages with typed payloads, hiding the broker implementation
+// This function automatically detects the broker type and calls the appropriate implementation
+func Subscribe[T any](ctx context.Context, ps interface{ Close() error }, topic string, handler MessageHandler[T]) error {
+	switch p := ps.(type) {
+	case *RabbitMQPubSub:
+		return SubscribeRabbitMQ(ctx, p, topic, handler)
+	case *GooglePubSubPubSub:
+		return SubscribeGooglePubSub(ctx, p, topic, handler)
+	default:
+		return fmt.Errorf("unsupported pubsub type: %T (supported: *RabbitMQPubSub, *GooglePubSubPubSub)", ps)
+	}
+}
+
+// Publish publishes a typed EventMessage, hiding the broker implementation
+// This function automatically detects the broker type and calls the appropriate implementation
+func Publish[T any](ctx context.Context, ps interface{ Close() error }, topic string, event *EventMessage[T]) error {
+	switch p := ps.(type) {
+	case *RabbitMQPubSub:
+		return PublishRabbitMQ(ctx, p, topic, event)
+	case *GooglePubSubPubSub:
+		return PublishGooglePubSub(ctx, p, topic, event)
+	default:
+		return fmt.Errorf("unsupported pubsub type: %T (supported: *RabbitMQPubSub, *GooglePubSubPubSub)", ps)
+	}
+}
+
+// NewPubSubFromConfig creates a PubSub instance based on the loaded configuration
+// This is a factory function that reads configuration and returns the appropriate implementation
+func NewPubSubFromConfig(logger watermill.LoggerAdapter) (interface{ Close() error }, error) {
+	config, err := LoadBrokerConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load broker config: %w", err)
+	}
+
+	switch config.Type {
+	case "rabbitmq":
+		rmqConfig := RabbitMQConfig{
+			Logger:         logger,
+			URL:            config.RabbitMQ.URL,
+			WorkerPoolSize: config.RabbitMQ.WorkerPoolSize,
+		}
+		if rmqConfig.URL == "" {
+			rmqConfig.URL = "amqp://guest:guest@localhost:5672/"
+		}
+		if rmqConfig.WorkerPoolSize <= 0 {
+			rmqConfig.WorkerPoolSize = 1
+		}
+		return NewRabbitMQPubSub(rmqConfig)
+
+	case "googlepubsub":
+		gcpConfig := GooglePubSubConfig{
+			Logger:          logger,
+			ProjectID:       config.GooglePubSub.ProjectID,
+			CredentialsPath: config.GooglePubSub.CredentialsPath,
+			WorkerPoolSize:  config.GooglePubSub.WorkerPoolSize,
+		}
+		if gcpConfig.ProjectID == "" {
+			return nil, fmt.Errorf("google pubsub project_id is required")
+		}
+		if gcpConfig.WorkerPoolSize <= 0 {
+			gcpConfig.WorkerPoolSize = 1
+		}
+		// Handle subscription name generation if specified
+		if config.GooglePubSub.GenerateSubscriptionName != "" {
+			pattern := config.GooglePubSub.GenerateSubscriptionName
+			gcpConfig.GenerateSubscriptionName = func(topic string) string {
+				if pattern == "" {
+					return topic + "-subscription"
+				}
+				return fmt.Sprintf(pattern, topic)
+			}
+		}
+		return NewGooglePubSub(gcpConfig)
+
+	default:
+		return nil, fmt.Errorf("unsupported broker type: %s (supported: rabbitmq, googlepubsub)", config.Type)
+	}
 }
 
 // messageJob represents a job to be processed by a worker
