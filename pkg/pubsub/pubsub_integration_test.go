@@ -61,10 +61,9 @@ func TestRabbitMQPubSub_Integration(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 
 	// Create PubSub instance
-	config := Config{
-		BrokerType:  BrokerTypeRabbitMQ,
-		Logger:      logger,
-		RabbitMQURL: amqpURL,
+	config := RabbitMQConfig{
+		Logger: logger,
+		URL:    amqpURL,
 	}
 	ps, err := NewRabbitMQPubSub(config)
 	require.NoError(t, err)
@@ -154,10 +153,9 @@ func TestRabbitMQPubSub_MultipleSubscribers(t *testing.T) {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	config := Config{
-		BrokerType:  BrokerTypeRabbitMQ,
-		Logger:      logger,
-		RabbitMQURL: amqpURL,
+	config := RabbitMQConfig{
+		Logger: logger,
+		URL:    amqpURL,
 	}
 
 	// Create publisher
@@ -291,10 +289,9 @@ func TestGooglePubSubPubSub_Integration(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 
 	// Create PubSub instance
-	config := Config{
-		BrokerType:      BrokerTypeGooglePubSub,
-		Logger:          logger,
-		GoogleProjectID: "test-project",
+	config := GooglePubSubConfig{
+		Logger:    logger,
+		ProjectID: "test-project",
 	}
 
 	ps, err := NewGooglePubSub(config)
@@ -406,10 +403,9 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	config := Config{
-		BrokerType:      BrokerTypeGooglePubSub,
-		Logger:          logger,
-		GoogleProjectID: "test-project",
+	config := GooglePubSubConfig{
+		Logger:    logger,
+		ProjectID: "test-project",
 	}
 
 	// Create publisher
@@ -500,7 +496,7 @@ func TestGooglePubSubPubSub_MultipleSubscribers(t *testing.T) {
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Log("force test 1")
+	t.Log("force test 2")
 
 	// Verify messages were distributed between subscribers
 	totalReceived = len(received1) + len(received2)

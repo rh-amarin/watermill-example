@@ -55,35 +55,24 @@ func TestWatermillMessageToEventMessage(t *testing.T) {
 }
 
 func TestNewPubSub(t *testing.T) {
-	t.Run("UnsupportedBrokerType", func(t *testing.T) {
-		config := Config{
-			BrokerType: BrokerType("unsupported"),
-			Logger:     watermill.NopLogger{},
-		}
-
-		_, err := NewPubSub(config)
-		assert.Error(t, err)
-		assert.Equal(t, ErrUnsupportedBrokerType, err)
-	})
-
 	t.Run("RabbitMQMissingURL", func(t *testing.T) {
-		config := Config{
-			BrokerType: BrokerTypeRabbitMQ,
-			Logger:     watermill.NopLogger{},
+		config := RabbitMQConfig{
+			Logger: watermill.NopLogger{},
+			URL:    "",
 		}
 
-		_, err := NewPubSub(config)
+		_, err := NewRabbitMQPubSub(config)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "rabbitmq url is required")
 	})
 
 	t.Run("GooglePubSubMissingProjectID", func(t *testing.T) {
-		config := Config{
-			BrokerType: BrokerTypeGooglePubSub,
-			Logger:     watermill.NopLogger{},
+		config := GooglePubSubConfig{
+			Logger:    watermill.NopLogger{},
+			ProjectID: "",
 		}
 
-		_, err := NewPubSub(config)
+		_, err := NewGooglePubSub(config)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "google project id is required")
 	})
@@ -109,18 +98,21 @@ func TestMessageHandler(t *testing.T) {
 }
 
 func TestConfig(t *testing.T) {
-	t.Run("BrokerTypeConstants", func(t *testing.T) {
-		assert.Equal(t, BrokerType("rabbitmq"), BrokerTypeRabbitMQ)
-		assert.Equal(t, BrokerType("googlepubsub"), BrokerTypeGooglePubSub)
+	t.Run("RabbitMQConfigWithLogger", func(t *testing.T) {
+		logger := watermill.NopLogger{}
+		config := RabbitMQConfig{
+			Logger: logger,
+			URL:    "amqp://guest:guest@localhost:5672/",
+		}
+		assert.Equal(t, logger, config.Logger)
 	})
 
-	t.Run("ConfigWithLogger", func(t *testing.T) {
+	t.Run("GooglePubSubConfigWithLogger", func(t *testing.T) {
 		logger := watermill.NopLogger{}
-		config := Config{
-			BrokerType: BrokerTypeRabbitMQ,
-			Logger:     logger,
+		config := GooglePubSubConfig{
+			Logger:    logger,
+			ProjectID: "project",
 		}
-
 		assert.Equal(t, logger, config.Logger)
 	})
 }

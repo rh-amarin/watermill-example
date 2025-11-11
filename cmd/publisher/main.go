@@ -25,12 +25,18 @@ func main() {
 
 	logger := watermill.NewStdLogger(false, false)
 
-	cfg, err := config.LoadPubSubConfig(*brokerType, logger)
-	if err != nil {
-		log.Fatalf("Failed to load pubsub config: %v", err)
+	var ps pubsub.PubSub
+	var err error
+	switch *brokerType {
+	case "rabbitmq":
+		rmqq := config.LoadRabbitMQConfig(logger)
+		ps, err = pubsub.NewRabbitMQPubSub(rmqq)
+	case "googlepubsub":
+		gcfg := config.LoadGooglePubSubConfig(logger)
+		ps, err = pubsub.NewGooglePubSub(gcfg)
+	default:
+		log.Fatalf("Unsupported broker type: %s", *brokerType)
 	}
-
-	ps, err := pubsub.NewPubSub(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create pubsub: %v", err)
 	}

@@ -17,12 +17,12 @@ type RabbitMQPubSub struct {
 }
 
 // NewRabbitMQPubSub creates a new RabbitMQ PubSub instance
-func NewRabbitMQPubSub(config Config) (PubSub, error) {
-	if config.RabbitMQURL == "" {
+func NewRabbitMQPubSub(config RabbitMQConfig) (PubSub, error) {
+	if config.URL == "" {
 		return nil, fmt.Errorf("rabbitmq url is required")
 	}
 
-	amqpConfig := amqp.NewDurablePubSubConfig(config.RabbitMQURL, amqp.GenerateQueueNameTopicNameWithSuffix(""))
+	amqpConfig := amqp.NewDurablePubSubConfig(config.URL, amqp.GenerateQueueNameTopicNameWithSuffix(""))
 
 	publisher, err := amqp.NewPublisher(amqpConfig, config.Logger)
 	if err != nil {

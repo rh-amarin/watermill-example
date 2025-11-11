@@ -18,19 +18,19 @@ type GooglePubSubPubSub struct {
 }
 
 // NewGooglePubSub creates a new Google Pub/Sub instance
-func NewGooglePubSub(config Config) (PubSub, error) {
-	if config.GoogleProjectID == "" {
+func NewGooglePubSub(config GooglePubSubConfig) (PubSub, error) {
+	if config.ProjectID == "" {
 		return nil, fmt.Errorf("google project id is required")
 	}
 
 	var opts []option.ClientOption
-	if config.GoogleCredentialsPath != "" {
-		opts = append(opts, option.WithCredentialsFile(config.GoogleCredentialsPath))
+	if config.CredentialsPath != "" {
+		opts = append(opts, option.WithCredentialsFile(config.CredentialsPath))
 	}
 	// If no credentials path is provided, use default credentials (works with emulator via PUBSUB_EMULATOR_HOST)
 
 	publisherConfig := googlecloud.PublisherConfig{
-		ProjectID:     config.GoogleProjectID,
+		ProjectID:     config.ProjectID,
 		ClientOptions: opts,
 	}
 
@@ -40,11 +40,16 @@ func NewGooglePubSub(config Config) (PubSub, error) {
 	}
 
 	subscriberConfig := googlecloud.SubscriberConfig{
-		ProjectID:     config.GoogleProjectID,
+		ProjectID:     config.ProjectID,
 		ClientOptions: opts,
-		GenerateSubscriptionName: func(topic string) string {
+	}
+	// Allow caller to customize subscription naming; default to topic-based
+	if config.GenerateSubscriptionName != nil {
+		subscriberConfig.GenerateSubscriptionName = config.GenerateSubscriptionName
+	} else {
+		subscriberConfig.GenerateSubscriptionName = func(topic string) string {
 			return topic + "-subscription"
-		},
+		}
 	}
 
 	subscriber, err := googlecloud.NewSubscriber(subscriberConfig, config.Logger)

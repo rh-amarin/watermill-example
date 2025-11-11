@@ -247,45 +247,20 @@ func ParseCloudEventFromJSON(data []byte) (*CloudEvent, error) {
 	return ce, nil
 }
 
-// BrokerType represents the type of message broker
-type BrokerType string
-
-const (
-	BrokerTypeRabbitMQ     BrokerType = "rabbitmq"
-	BrokerTypeGooglePubSub BrokerType = "googlepubsub"
-)
-
-// Config holds configuration for creating a PubSub instance
-type Config struct {
-	BrokerType BrokerType
-	Logger     watermill.LoggerAdapter
-
-	// Worker pool configuration
-	WorkerPoolSize int // Number of workers for processing messages concurrently (default: 1)
-
-	// RabbitMQ specific config
-	RabbitMQURL string
-
-	// Google Pub/Sub specific config
-	GoogleProjectID       string
-	GoogleCredentialsPath string
+// RabbitMQConfig holds configuration for RabbitMQ Pub/Sub
+type RabbitMQConfig struct {
+	Logger         watermill.LoggerAdapter
+	URL            string
+	WorkerPoolSize int
 }
 
-// NewPubSub creates a new PubSub instance based on the broker type
-func NewPubSub(config Config) (PubSub, error) {
-	// Set default worker pool size if not specified
-	if config.WorkerPoolSize <= 0 {
-		config.WorkerPoolSize = 1
-	}
-
-	switch config.BrokerType {
-	case BrokerTypeRabbitMQ:
-		return NewRabbitMQPubSub(config)
-	case BrokerTypeGooglePubSub:
-		return NewGooglePubSub(config)
-	default:
-		return nil, ErrUnsupportedBrokerType
-	}
+// GooglePubSubConfig holds configuration for Google Cloud Pub/Sub
+type GooglePubSubConfig struct {
+	Logger                   watermill.LoggerAdapter
+	ProjectID                string
+	CredentialsPath          string
+	WorkerPoolSize           int
+	GenerateSubscriptionName func(topic string) string
 }
 
 // withPanicRecovery wraps a message handler with panic recovery
